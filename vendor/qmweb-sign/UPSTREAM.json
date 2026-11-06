@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/jixunmoe/qmweb-sign",
+  "commit": "15305a3cc39f80eb1646ab2bae46468231765736",
+  "version": "2.0.3",
+  "license": "MIT",
+  "files": {
+    "src/ag1_cipher.ts": "8cc070ea652afce334a228e169a9dc6b478cabf64470406d2758abe131c9cbb9",
+    "src/zzc_sign.ts": "d054977dbf72f890d94977954cc01812e0290afcc06bd2d85276d91c97d5c15b",
+    "src/node.ts": "6d44a1e2d0a384f99b6f284b25d66bc767c6beedf6dd0401eeaab794658c418d",
+    "LICENSE": "5f898079c447882655eb48dfd12f628ec5d92a6fca6d43437075c6c52acb3d6e"
+  }
+}

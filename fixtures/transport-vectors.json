@@ -1,0 +1,38 @@
+{
+  "_source": {
+    "repository": "https://github.com/jixunmoe/qmweb-sign",
+    "commit": "15305a3cc39f80eb1646ab2bae46468231765736",
+    "license": "MIT",
+    "files": [
+      "src/zzc_sign.test.ts",
+      "src/ag1_cipher.test.ts"
+    ],
+    "note": "Public upstream vectors; no Cookie, account token or HTTP API capture."
+  },
+  "sign": [
+    {
+      "message": "123",
+      "sign": "zzcec1b555gzqzg7laztguyjl2bu20r6x1w50c55f60"
+    },
+    {
+      "message": "hello world",
+      "sign": "zzcfb3415bc4nfoxmd9uik71mkomtubjfjp141a1cbbcc"
+    },
+    {
+      "message": "jixun.uk",
+      "sign": "zzcf47b78apso27mjjbbzgbof0szikfkvyqc7fc3a2b5"
+    }
+  ],
+  "requests": [
+    {
+      "message": "{\"hello\":\"ag1!\"}",
+      "requestBase64": "UVKyyaPxYeBs+e6kkEeQpwwnsRmO4NI5JTdJvqrvU3w3elv4W1kcb8G35S4="
+    }
+  ],
+  "responses": [
+    {
+      "message": "{\"code\":0,\"ts\":0,\"start_ts\":100,\"traceid\":\"ffffffffffffffff\"}",
+      "responseBase64": "AR3vcjr+DTBcYVz/bBhmrSIJHD7gCEvTaS25FTtcfVKpa0g9/mtCC2i7WFnqezj9SWwKKxjteVw6+2gJEg=="
+    }
+  ]
+}

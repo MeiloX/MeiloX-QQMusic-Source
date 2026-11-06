@@ -1,84 +1,85 @@
 # MeiloX QQ Music Source
 
-A source plugin for [MeiloX](https://github.com/NEORUAA/MeiloX).
+A standalone source plugin for [MeiloX](https://github.com/NEORUAA/MeiloX).
 
-This experimental API 2 source uses QQ Music's website endpoints. It supplies home
-recommendations, discovery categories, charts, track/playlist/album/artist search,
-collection details, lyrics, and personal account/library access. It requires MeiloX
-with source API 2 support. No account or third-party resolver is bundled.
-
-Anonymous catalog operations were verified on 2026-11-06. Personal features require
-the user's own QQ Music web session. Favorites, followed artists, playlist creation,
-editing, deletion, and adding/removing tracks follow the website's request contracts.
-Playlist edits require the server to identify the playlist as owned by this session.
+QQ Music home recommendations, discovery categories and charts, track/playlist/
+album/artist search, collection details, lyrics, and personal account/library access.
+Favorites, followed artists, playlist creation/editing/deletion, and adding/removing
+tracks use the website's own contracts. Playlist edits require confirmed ownership.
 Reordering and cover uploads are not declared.
 
-## Configure in MeiloX
+Version 0.3 adapts the MIT-licensed [qmweb-sign](https://github.com/jixunmoe/qmweb-sign)
+AG1 protocol with synchronous SHA-1/AES-GCM and binary response decoding. The source
+is pinned to commit `15305a3cc39f80eb1646ab2bae46468231765736`.
+It requires a MeiloX API 2 host with `secureRandomBase64` and Base64 HTTP responses.
+The installable [`qq-music.meisource`](qq-music.meisource) includes its dependencies.
 
-1. Import `qq-music.meisource` in Settings → General → Audio Sources. Updating from
-   0.1 requires reviewing the added website and artwork domains.
-2. In a desktop browser, sign in at `https://y.qq.com/`. Open DevTools → Network,
+## Configure
+
+1. Import the package in Settings → General → Audio Sources. Updating from 0.1
+   requires reviewing the additional website/artwork domains; 0.3 adds no domains.
+2. Sign in at `https://y.qq.com/` in a desktop browser. Open DevTools → Network,
    reload, and copy the complete **Request Headers → Cookie** from a request to
-   `u.y.qq.com` or `c.y.qq.com` into the QQ source's password field. This is the
-   session Cookie, not a QQ password or a single key value.
+   `u.y.qq.com` or `c.y.qq.com` into the QQ source's password field.
 3. Leave account ID blank when the Cookie contains `uin`/`wxuin`/`p_uin`. Otherwise
-   enter the ID belonging to the same session. Long WeChat IDs remain strings.
-4. Save, then choose QQ Music from the source menu.
+   enter the ID from the same session. Long WeChat IDs remain strings.
+4. Save and select QQ Music from the source menu.
 
-Credentials stay in this plugin's Keystore-protected configuration. The adapter
-sends them only to the exact `u.y.qq.com` and `c.y.qq.com` API hosts. Artwork and audio
-requests never receive the Cookie. Do not paste credentials into logs or issues.
-Expired or rejected authorization returns `AUTH_EXPIRED`; Netease login is separate.
+This is the user's own web session, not a QQ password. MeiloX encrypts the source
+configuration with Android Keystore. The adapter sends it only to the exact QQ API
+hosts; artwork/audio requests never receive the Cookie. Renew the session when QQ
+rejects authorization.
 
 ## Playback
 
-The current website player uses `music.vkey.GetEVkey/GetUrl`. On this date, anonymous
-requests and the tested personal session were refused with no full audio URL. The
-current website request wrapper also uses its own signed, encrypted `musics.fcg`
-transport. This adapter does not reproduce platform signing secrets or bypass that
-transport. Supplying a Cookie alone therefore does not establish playback access.
+Playback uses `music.vkey.GetEVkey/GetUrl` and remains subject to QQ's session and
+account rights. Live full playback with 0.3 is awaiting validation. Trial segments
+are rejected, and the returned filename determines actual audio quality. Audio
+uses `NO_STORE` without offline caching or downloads. Only the declared website
+fallback CDN is accepted; adding another requires a reviewed package update.
 
-When QQ grants a full resource, its filename determines the reported quality.
-`RS02` trial segments are rejected, including encoded or mislabeled paths. Audio
-uses `NO_STORE`, with no download or offline audio cache. Only the declared fallback
-CDN `ws6.stream.qqmusic.qq.com` is accepted. Additional CDNs require a reviewed
-package update; redirects stay subject to host restrictions.
+## Development
 
-## Contracts and package
-
-This repository is self-contained. Node.js runs the offline contract tests; Python 3
-uses only its standard library to build the package. No MeiloX checkout or Android
-build is required. The installable artifact is [`qq-music.meisource`](qq-music.meisource).
+Node.js 20.19+ and Python 3 are required. Dependencies are pinned in the lockfile.
+No Android checkout is needed.
 
 ```sh
-node test.mjs
+npm ci --ignore-scripts
+npm test
 python3 package.py
 ```
 
-The runner has no network client. Captured fixtures contain projected public
-metadata; the lyric fixture contains only LRC metadata tags. Private account and
-write responses are synthetic. These verify request formation and navigation,
-not successful changes to an account or live playback. The ZIP includes only its
-manifest and JavaScript, without fixtures or credentials.
+Edit `src/adapter.js` and `src/transport.js`; `index.js` is the generated, standalone
+entry. The ZIP includes only manifest, bundled JavaScript, LICENSE, and NOTICE.
+The entry is checked against the SDK's 256 KiB limit.
 
-Ordinary playlist IDs are global QQ `tid` values. Charts use `chart:<topid>` and are
-read-only. Account-local `dirId` values are obtained from an ownership-checked
-playlist response, never guessed from a global ID. Liked tracks use the account
-profile's favorites playlist ID for reading and the website's directory 201 for
-its explicit favorite action.
+Default tests run offline with captured public metadata and synthetic account/
+write responses. Protocol vectors use published MIT reference vectors and locally constructed public text.
+A separate offline comparison uses the pinned MIT reference in `vendor/qmweb-sign`.
+Public integration checks are explicitly enabled and send no Cookies or account writes:
 
-Primary contracts:
-[home](https://y.qq.com/ryqq/js/index.chunk.ace96907d7435166d469.js),
+```sh
+npm run verify:reference
+npm run test:public
+```
+
+Ordinary playlist IDs are global QQ `tid` values; charts use read-only `chart:<id>`.
+Account-local directory IDs are read from an ownership-checked response. Liked
+tracks use the profile's favorites playlist ID for reading and directory 201 for
+the website's favorite action. Pagination keeps server cursors separate from
+visible rows when system directories are filtered.
+
+## Sources and license
+
+Primary contracts: [home](https://y.qq.com/ryqq/js/index.chunk.ace96907d7435166d469.js),
 [playlist](https://y.qq.com/ryqq/js/playlist.chunk.b75ba461c24b12c4d024.js),
 [playlist editing](https://y.qq.com/ryqq/js/playlist_edit.chunk.2725441057c73cad7c10.js),
 [artist](https://y.qq.com/ryqq/js/singer.chunk.ff1d987fc9286d39b86c.js),
 [player](https://y.qq.com/ryqq/js/player.chunk.d0a478ab3d586bf78298.js),
-[request wrapper](https://y.qq.com/ryqq/js/vendor.chunk.d8b4489cbdb338cb0470.js),
-[account/library helpers](https://y.qq.com/ryqq/js/common.chunk.5b378f933e2203b7da48.js).
-This is not the separate licensed
-[partner OpenAPI](https://y.qq.com/music_developer/static/docs/OpenAPI/overview.md),
-which has its own application and distribution requirements.
+[transport](https://y.qq.com/ryqq/js/vendor.chunk.d8b4489cbdb338cb0470.js),
+[account/library](https://y.qq.com/ryqq/js/common.chunk.5b378f933e2203b7da48.js).
+The separate [partner OpenAPI](https://y.qq.com/music_developer/static/docs/OpenAPI/overview.md)
+has its own application and distribution requirements.
 
-## License
-
-[GPL-3.0-only](LICENSE), inherited from MeiloX. See [NOTICE](NOTICE) for provenance.
+[GPL-3.0-only](LICENSE). The qmweb-sign protocol source and noble SHA-1/AES-GCM libraries are MIT-licensed;
+[NOTICE](NOTICE) contains their complete copyright and permission notices.

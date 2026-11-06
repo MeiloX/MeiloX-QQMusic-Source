@@ -3,7 +3,7 @@
   "providerId": "qqmusic",
   "name": "QQ 音乐",
   "author": "MeiloX contributors",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "apiVersion": 2,
   "entry": "index.js",
   "capabilities": [

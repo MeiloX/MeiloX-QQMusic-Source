@@ -1,0 +1,24 @@
+{
+  "name": "meilox-qqmusic-source",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node test.mjs",
+    "package": "python3 package.py",
+    "verify:reference": "node tools/verify-reference.mjs",
+    "test:public": "node --max-old-space-size=128 tools/live-readonly.mjs"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
