@@ -16,8 +16,8 @@ The installable [`qq-music.meisource`](qq-music.meisource) includes its dependen
 
 ## Configure
 
-1. Import the package in Settings → General → Audio Sources. Updating from 0.1
-   requires reviewing the additional website/artwork domains; 0.3 adds no domains.
+1. Import the package in Settings → General → Audio Sources. Review the requested
+   domains when updating, including the declared audio CDN.
 2. Sign in at `https://y.qq.com/` in a desktop browser. Open DevTools → Network,
    reload, and copy the complete **Request Headers → Cookie** from a request to
    `u.y.qq.com` or `c.y.qq.com` into the QQ source's password field.
@@ -33,10 +33,11 @@ rejects authorization.
 ## Playback
 
 Playback uses `music.vkey.GetEVkey/GetUrl` and remains subject to QQ's session and
-account rights. Live full playback with 0.3 is awaiting validation. Trial segments
-are rejected, and the returned filename determines actual audio quality. Audio
-uses `NO_STORE` without offline caching or downloads. Only the declared website
-fallback CDN is accepted; adding another requires a reviewed package update.
+account rights. Version 0.3 passed real Android-host playback with the decoded full
+track duration verified. Trial segments are rejected, and the returned filename determines actual audio quality. Audio
+uses `NO_STORE` without offline caching or downloads. The declared audio hosts are
+`ws6.stream.qqmusic.qq.com` and `sjy6.stream.qqmusic.qq.com`; adding another requires
+a reviewed package update. Absolute playback URLs keep their original approved host.
 
 ## Development
 
@@ -67,11 +68,17 @@ Ordinary playlist IDs are global QQ `tid` values; charts use read-only `chart:<i
 Account-local directory IDs are read from an ownership-checked response. Liked
 tracks use the profile's favorites playlist ID for reading and directory 201 for
 the website's favorite action. Pagination keeps server cursors separate from
-visible rows when system directories are filtered.
+visible rows when system directories are filtered. Authenticated search uses the
+website Desktop contract. Its anonymous Lite fallback shares the same four-request
+budget, including when QQ returns a success-shaped empty authentication gate.
+
+The Android compatibility run also verified all four authenticated search types,
+home/discovery, content details and all five personal library collections. Live
+checks were read-only; account mutations remain covered by offline contract tests.
 
 ## Sources and license
 
-Primary contracts: [home](https://y.qq.com/ryqq/js/index.chunk.ace96907d7435166d469.js),
+Primary contracts: [search](https://y.qq.com/ryqq/js/search.chunk.08cc51fcb18dcb9c18f2.js), [home](https://y.qq.com/ryqq/js/index.chunk.ace96907d7435166d469.js),
 [playlist](https://y.qq.com/ryqq/js/playlist.chunk.b75ba461c24b12c4d024.js),
 [playlist editing](https://y.qq.com/ryqq/js/playlist_edit.chunk.2725441057c73cad7c10.js),
 [artist](https://y.qq.com/ryqq/js/singer.chunk.ff1d987fc9286d39b86c.js),

@@ -105,6 +105,24 @@ assert.equal(payload.comm.g_tk, 510355573);
 assert.ok(!Object.hasOwn(payload.comm, 'authst'));
 assert.ok(!Object.hasOwn(payload.playback.param, 'filename'));
 
+for (const host of ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com']) {
+  for (const hostData of [{ sip: ['http://' + host + '/'] }, { thirdip: ['https://' + host + '/'] }]) {
+    const selected = playback({ ...hostData, midurlinfo: [{ songmid: trackId, filename: file, purl: file + '?fixture=1' }] }).call('playback.resolve', { trackId });
+    assert.equal(selected.uri, 'https://' + host + '/' + file + '?fixture=1');
+    assert.equal(selected.cachePolicy, 'NO_STORE');
+    assert.ok(!Object.keys(selected.headers).some(key => /cookie|authorization/i.test(key)));
+  }
+  const absolute = playback({ sip: ['https://not-declared.example/'], midurlinfo: [{ songmid: trackId, filename: file,
+    purl: 'http://' + host + '/' + file + '?fixture=1' }] }).call('playback.resolve', { trackId });
+  assert.equal(absolute.uri, 'https://' + host + '/' + file + '?fixture=1');
+  for (const base of ['https://' + host + '.evil.example/', 'https://' + host + '@evil.example/',
+    'https://evil@' + host + '/', 'https://' + host + ':443/', '//' + host + '/']) {
+    const badBase = playback({ sip: [base], midurlinfo: [{ songmid: trackId, filename: file, purl: file }] });
+    assert.deepEqual(badBase.call('playback.resolve', { trackId }), { error: 'UNSUPPORTED' });
+    const badAbsolute = playback({ sip: ['https://' + host + '/'], midurlinfo: [{ songmid: trackId, filename: file, purl: base + file }] });
+    assert.deepEqual(badAbsolute.call('playback.resolve', { trackId }), { error: base.startsWith('//') ? 'INVALID_RESPONSE' : 'UNSUPPORTED' });
+  }
+}
 const expired = create(session, { code: 0, playback: { code: 1000 } });
 assert.deepEqual(expired.call('playback.resolve', { trackId }), { error: 'AUTH_EXPIRED' });
 const trial = playback({ midurlinfo: [{ songmid: trackId, filename: 'RS02trial.mp3', purl: 'RS02trial.mp3' }] });
@@ -135,6 +153,26 @@ const wechatPayload = requestPayload(wechat.requests.at(-1));
 assert.equal(wechatPayload.comm.uin, '123456789012345678');
 assert.equal(wechatPayload.playback.param.uin, '123456789012345678');
 assert.equal(wechatPayload.comm.g_tk, 5381);
+for (const [cookie, expectedUin, expectedCSRF] of [
+  ['uin=o123456; qqmusic_key=fixture%40key; qm_keyst=first-qm; uin=o654321; qqmusic_key=last-key; qm_keyst=last-qm', 123456, 510355573],
+  ['uin=o123456; wxopenid=first-openid; wxuin=123456789012345678; qqmusic_key=fixture%40key; qm_keyst=first-qm; uin=o654321; wxopenid=; wxuin=987654321098765432; qqmusic_key=last-key; qm_keyst=', '123456789012345678', 510355573],
+  ['uin=o123456; qm_keyst=first-qm; qm_keyst=', 123456, 5381],
+  ['uin=o123456; qqmusic_key=; qqmusic_key=last-key; qm_keyst=first-qm', 123456, 5381],
+]) {
+  const duplicate = playback({ midurlinfo: [] }, { cookie });
+  duplicate.call('playback.resolve', { trackId });
+  assert.equal(duplicate.requests.length, 2);
+  const outgoing = duplicate.requests.at(-1);
+  const payload = requestPayload(outgoing);
+  assert.equal(payload.comm.uin, expectedUin);
+  assert.equal(payload.playback.param.uin, String(expectedUin));
+  assert.equal(payload.comm.g_tk, expectedCSRF);
+  assert.equal(payload.comm.g_tk_new_20200303, expectedCSRF);
+  assert.ok(duplicate.requests.every(request => request.headers.Cookie === cookie));
+}
+const emptyFirstKey = playback({ midurlinfo: [] }, { cookie: 'uin=o123456; qm_keyst=; qm_keyst=last-qm' });
+assert.deepEqual(emptyFirstKey.call('playback.resolve', { trackId }), { error: 'AUTH_EXPIRED' });
+assert.equal(emptyFirstKey.requests.length, 0);
 const aacFile = `C400${fixtures.detail.detail.data.track_info.file.media_mid}.m4a`;
 const aac = playback({ midurlinfo: [{ songmid: trackId, filename: aacFile, purl: aacFile }] }).call('playback.resolve', { trackId });
 assert.equal(aac.mimeType, 'audio/mp4');
@@ -143,7 +181,7 @@ assert.ok(!Object.hasOwn(aac, 'contentLength'));
 const injected = create({ cookie: session.cookie + '\r\nX-Injected: yes' });
 assert.deepEqual(injected.call('playback.resolve', { trackId }), { error: 'INVALID_RESPONSE' });
 assert.equal(injected.requests.length, 0);
-assert.deepEqual(manifest.permissions.network, ['u.y.qq.com', 'c.y.qq.com', 'y.gtimg.cn', 'music-file.y.qq.com', 'p.qpic.cn', 'qpic.y.qq.com', 'pic6.y.qq.com', 'thirdqq.qlogo.cn', 'q.qlogo.cn', 'ws6.stream.qqmusic.qq.com']);
+assert.deepEqual(manifest.permissions.network, ['u.y.qq.com', 'c.y.qq.com', 'y.gtimg.cn', 'music-file.y.qq.com', 'p.qpic.cn', 'qpic.y.qq.com', 'pic6.y.qq.com', 'thirdqq.qlogo.cn', 'q.qlogo.cn', 'ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com']);
 assert.ok(manifest.config.every(field => !field.required));
 
 // API2 exercises captured public metadata and synthetic private-account responses.
@@ -209,6 +247,12 @@ for (const operation of manifest.capabilities.filter(operation => /^(library\.|t
   assert.deepEqual(denied.call(operation, {}), { error: 'AUTH_REQUIRED' }, operation);
   assert.equal(denied.requests.length, 0);
 }
+const signedInPublicSearch = create(session, null, 2, (_request, state) => ({ code: 0, request: { code: 0, data: {
+  body: { song: { list: fixtures.search.request.data.body.item_song } }, meta: fixtures.search.request.data.meta,
+} } }));
+assert.equal(signedInPublicSearch.call('catalog.search', { query: 'Fixture', type: 'track', offset: 0, limit: 3 }).items[0].type, 'track');
+assert.equal(requestPayload(signedInPublicSearch.requests[0]).request.method, 'DoSearchForQQMusicDesktop');
+assert.ok(signedInPublicSearch.requests.every(request => request.headers.Cookie === session.cookie));
 const OWN_PLAYLIST_ID = '9900112233';
 const OWNER_ENCRYPTED_UIN = 'fixture-owner-123456';
 const profile = { code: 0, data: { creator: { uin: '123456', encrypt_uin: OWNER_ENCRYPTED_UIN,
@@ -245,11 +289,12 @@ function privateResponse(request, state) {
   throw new Error(`Unhandled private fixture stage: ${state.stage}`);
 }
 const personal = create(session, null, 2, privateResponse);
-assert.deepEqual(personal.call('account.get', {}), { accountId: '123456', displayName: 'Fixture account', avatarUrl: 'https://q.qlogo.cn/fixture' });
+assert.deepEqual(personal.call('account.get', {}), { accountId: 'enc:' + OWNER_ENCRYPTED_UIN, displayName: 'Fixture account', avatarUrl: 'https://q.qlogo.cn/fixture' });
 const profileRequest = new URL(personal.requests.at(-1).url);
 assert.equal(profileRequest.hostname, 'c.y.qq.com');
 assert.equal(profileRequest.pathname, '/rsc/fcgi-bin/fcg_get_profile_homepage.fcg');
 assert.equal(profileRequest.searchParams.get('userid'), '0');
+assert.equal(profileRequest.searchParams.get('ct'), '20');
 assert.equal(profileRequest.searchParams.get('loginUin'), '123456');
 assert.equal(profileRequest.searchParams.get('uin'), '123456');
 assert.equal(profileRequest.searchParams.get('cv'), '4747474');
@@ -260,12 +305,13 @@ for (const [config, expectedUin] of [
 ]) {
   const self = create(config, null, 2, () => ({ ...profile, data: { ...profile.data,
     creator: { ...profile.data.creator, uin: expectedUin } } }));
-  assert.equal(self.call('account.get', {}).accountId, expectedUin);
+  assert.equal(self.call('account.get', {}).accountId, 'enc:' + OWNER_ENCRYPTED_UIN);
   const query = new URL(self.requests[0].url).searchParams;
   assert.equal(query.get('uin'), expectedUin);
   assert.equal(query.get('loginUin'), expectedUin);
   assert.equal(query.get('cv'), '4747474');
   assert.equal(query.get('userid'), '0');
+  assert.equal(query.get('ct'), '20');
 }
 assert.equal(personal.call('library.likedTracks', { offset: 0, limit: 3 }).items[0].type, 'track');
 const created = personal.call('library.createdPlaylists', { offset: 0, limit: 2 });
@@ -461,6 +507,11 @@ function isMutationRequest(request) {
 const ownershipCases = [
   ['missing profile owner', (p, _) => { delete p.data.creator.encrypt_uin; }],
   ['wrong profile owner', (p, _) => { p.data.creator.uin = '654321'; }],
+  ['redacted profile/list identity mismatch', (p, _) => { p.data.creator.uin = 0; p.data.creator.encrypt_uin = 'profile-owner-B'; }],
+  ['malformed profile owner', (p, _) => { p.data.creator.uin = false; }],
+  ['malformed redacted profile owner', (p, _) => { p.data.creator.uin = '00'; }],
+  ['empty encrypted profile owner', (p, _) => { p.data.creator.uin = 0; p.data.creator.encrypt_uin = ''; }],
+  ['whitespace encrypted profile owner', (p, _) => { p.data.creator.uin = 0; p.data.creator.encrypt_uin = ' '; }],
   ['missing list owner', (_, list) => { delete list.data.encrypt_uin; }],
   ['wrong encrypted list owner', (_, list) => { list.data.encrypt_uin = 'another-fixture-owner'; }],
   ['wrong numeric list owner', (_, list) => { list.data.hostuin = '654321'; }],
@@ -483,6 +534,31 @@ for (const [label, change] of ownershipCases) {
   });
   assert.ok(denied.call('playlist.delete', { playlistId: OWN_PLAYLIST_ID }).error === 'UNSUPPORTED', label);
   assert.ok(denied.requests.every(request => !isMutationRequest(request)), label);
+}
+// Privacy-redacted numeric identities are valid only through the authenticated
+// self-profile route, with matching encrypted ownership on the created catalog.
+for (const numericUin of [undefined, 0, '0']) {
+  const redactedProfile = structuredClone(profile);
+  if (numericUin === undefined) delete redactedProfile.data.creator.uin;
+  else redactedProfile.data.creator.uin = numericUin;
+  const privacy = create(session, null, 2, (request, state) =>
+    ['account', 'liked-profile', 'owner-profile'].includes(state.stage) ? redactedProfile : privateResponse(request, state));
+  assert.equal(privacy.call('account.get', {}).accountId, 'enc:' + OWNER_ENCRYPTED_UIN);
+  assert.equal(privacy.call('library.likedTracks', { offset: 0, limit: 3 }).items[0].type, 'track');
+  assert.deepEqual(privacy.call('library.createdPlaylists', { offset: 0, limit: 3 }).items[0].playlist.editableActions,
+    ['update', 'delete', 'addTracks', 'removeTracks']);
+  const before = privacy.requests.length;
+  assert.equal(privacy.call('playlist.delete', { playlistId: OWN_PLAYLIST_ID }), true);
+  assert.equal(privacy.requests.length - before, 3);
+}
+for (const bad of [null, false, true, {}, [], '', '00', 'o0', -1, 1.5, '654321']) {
+  const malformed = structuredClone(profile); malformed.data.creator.uin = bad;
+  const rejected = create(session, null, 2, () => malformed);
+  assert.deepEqual(rejected.call('account.get', {}), { error: 'INVALID_RESPONSE' });
+}
+for (const bad of [undefined, '', ' ', 'bad\nidentity', {}, 0]) {
+  const malformed = structuredClone(profile); malformed.data.creator.uin = 0; malformed.data.creator.encrypt_uin = bad;
+  assert.deepEqual(create(session, null, 2, () => malformed).call('account.get', {}), { error: 'INVALID_RESPONSE' });
 }
 for (const replacement of ['uin=o654321; qqmusic_key=other-fixture-key', 'uin=o123456; qqmusic_key=rotated-fixture-key']) {
   const movingSession = { ...session };
@@ -553,16 +629,22 @@ assert.ok(systemCollision.call('playlist.delete', { playlistId: '123' }).error =
 assert.ok(systemCollision.requests.every(request => !isMutationRequest(request)));
 
 // Small search pages still fetch a supported backend page, then consume only visible positions.
-for (const type of ['track', 'playlist', 'album', 'artist']) {
+for (const type of ['track', 'playlist', 'album', 'artist']) for (const authenticated of [false, true]) {
   const rows = Array.from({ length: 47 }, (_, index) => type === 'track' ? { ...fixtures.detail.detail.data.track_info, mid: 'Track' + index, title: 'Track ' + index } :
     type === 'playlist' ? { dissid: String(7000000000 + index), dissname: 'Playlist ' + index } :
     type === 'album' ? { albummid: 'Album' + index, name: 'Album ' + index } : { singerMID: 'Artist' + index, singerName: 'Artist ' + index });
-  const key = { track: 'item_song', playlist: 'item_songlist', album: 'item_album', artist: 'singer' }[type];
-  const pages = create({}, null, 2, request => {
-    const params = requestPayload(request).request.param;
+  const key = (authenticated ? { track: 'song', playlist: 'songlist', album: 'album', artist: 'singer' } :
+    { track: 'item_song', playlist: 'item_songlist', album: 'item_album', artist: 'singer' })[type];
+  const pages = create(authenticated ? session : {}, null, 2, request => {
+    const payload = requestPayload(request).request, params = payload.param;
+    assert.equal(payload.method, authenticated ? 'DoSearchForQQMusicDesktop' : 'DoSearchForQQMusicLite');
     assert.ok(params.num_per_page >= 20);
+    assert.match(params.searchid, /^\d+$/);
+    assert.equal(request.headers.Cookie, authenticated ? session.cookie : undefined);
+    if (authenticated) assert.equal(params.remoteplace, 'yqq.yqq.yqq');
     const start = (params.page_num - 1) * params.num_per_page;
-    return { code: 0, request: { code: 0, data: { body: { [key]: rows.slice(start, start + params.num_per_page) }, meta: { sum: rows.length } } } };
+    const list = rows.slice(start, start + params.num_per_page);
+    return { code: 0, request: { code: 0, data: { body: { [key]: authenticated ? { list } : list }, meta: { sum: rows.length } } } };
   });
   let cursor; const found = [];
   do {
@@ -579,3 +661,36 @@ for (const type of ['track', 'playlist', 'album', 'artist']) {
   assert.equal(tiny.nextCursor, '20');
 }
 console.log('QQ small search pages: supported backend size, cross-page offsets and unique complete results passed offline.');
+
+// A desktop failure/empty gate gets one Lite route, within the same host-hop budget.
+for (const desktop of [
+  { code: 0, request: { code: 0, data: { body: { song: { list: [] } }, meta: { sum: 0 } } } },
+  { code: 0, request: { code: 1000 } },
+  { code: 0, request: { code: 2001 } },
+]) {
+  const fallback = create(session, null, 2, (request, state) => {
+    assert.equal(request.headers.Cookie, state.searchTransport === 'desktop' ? session.cookie : undefined);
+    return state.searchTransport === 'desktop' ? desktop : fixtures.search;
+  });
+  assert.equal(fallback.call('catalog.search', { query: 'Fixture', type: 'track', offset: 0, limit: 3 }).items[0].type, 'track');
+  assert.equal(fallback.requests.length, 2);
+  assert.equal(requestPayload(fallback.requests[1]).request.method, 'DoSearchForQQMusicLite');
+}
+const failedCorroboration = create(session, null, 2, (_, state) => state.searchTransport === 'desktop' ?
+  { code: 0, request: { code: 0, data: { body: { song: { list: [] } }, meta: { sum: 0 } } } } :
+  { code: 0, request: { code: 2001 } });
+assert.deepEqual(failedCorroboration.call('catalog.search', { query: 'Fixture', type: 'track', offset: 0, limit: 3 }), { error: 'UNAVAILABLE' });
+assert.equal(failedCorroboration.requests.length, 2);
+const partialBudget = create(session, null, 2, (request, state) => {
+  if (state.searchTransport === 'desktop') return { code: 0, request: { code: 1000 } };
+  const params = requestPayload(request).request.param;
+  const list = Array.from({ length: params.num_per_page }, (_, index) => index === 0 ?
+    { ...fixtures.detail.detail.data.track_info, mid: 'Budget' + params.page_num } : {});
+  return { code: 0, request: { code: 0, data: { body: { item_song: list }, meta: { sum: 200 } } } };
+});
+const partialSearch = partialBudget.call('catalog.search', { query: 'Fixture', type: 'track', offset: 0, limit: 4 });
+assert.equal(partialBudget.requests.length, 4);
+assert.equal(partialSearch.items.length, 3);
+assert.equal(partialSearch.hasMore, true);
+assert.equal(partialSearch.nextCursor, '60');
+console.log('QQ search transports: official authenticated Desktop schemas and bounded anonymous Lite corroboration passed offline.');

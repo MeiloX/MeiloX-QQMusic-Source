@@ -5,7 +5,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
 (function () {
   'use strict';
   const API = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
-  const AUDIO_HOST = 'ws6.stream.qqmusic.qq.com';
+  const AUDIO_HOSTS = ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com'];
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
 
   function failure(code) { return { error: code }; }
@@ -16,7 +16,11 @@ import { sha1 } from '@noble/hashes/legacy.js';
     const fields = Object.create(null);
     cookieText(context).split(';').forEach(function (part) {
       const position = part.indexOf('=');
-      if (position > 0) fields[part.slice(0, position).trim()] = part.slice(position + 1).trim();
+      if (position > 0) {
+        const name = part.slice(0, position).trim();
+        // Website getCookie() selects the first same-name cookie in header order.
+        if (!Object.prototype.hasOwnProperty.call(fields, name)) fields[name] = part.slice(position + 1).trim();
+      }
     });
     return fields;
   }
@@ -68,7 +72,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     const cookie = cookieText(context);
     if (/[\r\n\u0000]/.test(cookie)) return failure('INVALID_RESPONSE');
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json', Referer: 'https://y.qq.com/', 'User-Agent': UA };
-    if (cookie) headers.Cookie = cookie;
+    if (cookie && !lite) headers.Cookie = cookie;
     state.guid = state.guid || guid(context);
     state.ag1 = !lite;
     const plain = { url: API, method: 'POST', headers: headers, body: JSON.stringify(body) };
@@ -157,10 +161,15 @@ import { sha1 } from '@noble/hashes/legacy.js';
     if (result.length < 14) result = result.replace(/^0+(?=\d)/, '');
     return /^\d+$/.test(result) && result !== '0' ? result : null;
   }
-  function profileOwner(data, context) {
+  function profileOwner(data, context, state) {
     const creator = data.creator;
-    if (!object(creator) || ownerUin(creator.uin) !== account(context).uin ||
-        typeof creator.encrypt_uin !== 'string' || !creator.encrypt_uin || creator.encrypt_uin.length > 256) return null;
+    // Only the fixed userid=0/ct=20 endpoint may establish the authenticated
+    // encrypted identity. QQ may redact its numeric uin to 0 on this response.
+    if (!state.selfProfile || state.sessionTag !== sessionTag(context) || !object(creator) ||
+        typeof creator.encrypt_uin !== 'string' || !creator.encrypt_uin || creator.encrypt_uin.length > 256 ||
+        /[\s\u0000-\u001f\u007f]/.test(creator.encrypt_uin)) return null;
+    const redacted = creator.uin === undefined || creator.uin === 0 || creator.uin === '0';
+    if (!redacted && ownerUin(creator.uin) !== account(context).uin) return null;
     return { uin: account(context).uin, encryptedUin: creator.encrypt_uin };
   }
   function ownerFieldsMatch(value, owner) {
@@ -218,6 +227,10 @@ import { sha1 } from '@noble/hashes/legacy.js';
     }
     try { return decodeURIComponent(escaped); } catch (_) { return ''; }
   }
+  function approvedAudioUrl(value) {
+    const authority = /^https?:\/\/([^/?#]+)(?:\/|$)/i.exec(value);
+    return Boolean(authority && AUDIO_HOSTS.indexOf(authority[1].toLowerCase()) >= 0);
+  }
   function resource(data, state, context) {
     if (data.retcode !== undefined && Number(data.retcode) !== 0) return Number(data.retcode) === 104009 ? authError(context) : failure('UNAVAILABLE');
     const item = (data.midurlinfo || []).find(function (entry) { return entry.songmid === state.trackId; });
@@ -236,14 +249,14 @@ import { sha1 } from '@noble/hashes/legacy.js';
     else return failure('INVALID_RESPONSE');
     let uri = String(item.purl);
     if (/^https?:\/\//i.test(uri)) {
-      if (!new RegExp('^https?://' + AUDIO_HOST.replace(/\./g, '\\.') + '(?:/|$)', 'i').test(uri)) return failure('UNSUPPORTED');
+      if (!approvedAudioUrl(uri)) return failure('UNSUPPORTED');
       uri = uri.replace(/^http:/i, 'https:');
     } else {
       if (/^(?:\/\/|[a-z]+:)/i.test(uri)) return failure('INVALID_RESPONSE');
-      const supplied = [].concat(data.thirdip || [], data.sip || []).filter(function (base) { return typeof base === 'string' && /^https?:\/\//i.test(base); });
-      const allowed = supplied.find(function (base) { return new RegExp('^https?://' + AUDIO_HOST.replace(/\./g, '\\.') + '(?:/|$)', 'i').test(base); });
+      const supplied = [].concat(data.thirdip || [], data.sip || []).filter(function (base) { return typeof base === 'string'; });
+      const allowed = supplied.find(approvedAudioUrl);
       if (supplied.length && !allowed) return failure('UNSUPPORTED');
-      const base = allowed ? allowed.replace(/^http:/i, 'https:').replace(/\/$/, '') : 'https://' + AUDIO_HOST;
+      const base = allowed ? allowed.replace(/^http:/i, 'https:').replace(/\/$/, '') : 'https://' + AUDIO_HOSTS[0];
       uri = base + '/' + uri.replace(/^\//, '');
     }
     const seconds = Number(data.expiration);
@@ -361,7 +374,8 @@ import { sha1 } from '@noble/hashes/legacy.js';
     return object(entry.data) ? entry.data : failure('INVALID_RESPONSE');
   }
   function profile(state, context) {
-    return cgi('/rsc/fcgi-bin/fcg_get_profile_homepage.fcg', { cid: 205360838, ct: 24, userid: 0, reqfrom: 1, reqtype: 0, needNewCode: 0 }, state, context);
+    return cgi('/rsc/fcgi-bin/fcg_get_profile_homepage.fcg', { cid: 205360838, ct: 20, userid: 0, reqfrom: 1, reqtype: 0, needNewCode: 0 },
+      Object.assign({}, state, { selfProfile: true, sessionTag: sessionTag(context) }), context);
   }
   function playlistRequest(params, stage, context, extra) {
     const state = Object.assign({}, page(params), extra, { stage: stage, playlistId: String(params.playlistId || '') });
@@ -423,10 +437,27 @@ import { sha1 } from '@noble/hashes/legacy.js';
     return beginOwnerProof({ ownerPurpose: 'mutation', mutation: operation, params: params, playlistId: String(params.playlistId) }, context);
   }
   function searchRequest(state, context) {
-    return request('request', 'music.search.SearchCgiService', 'DoSearchForQQMusicLite', {
+    const desktop = state.searchTransport === 'desktop';
+    const params = {
       query: state.query, search_type: state.searchType, page_num: Math.floor(state.searchOffset / state.fetchSize) + 1,
-      num_per_page: state.fetchSize, highlight: 0, nqc_flag: 0, page_id: 1, grp: 1,
-    }, state, context, true);
+      num_per_page: state.fetchSize, searchid: state.searchId,
+    };
+    if (desktop) params.remoteplace = 'yqq.yqq.yqq';
+    else Object.assign(params, { highlight: 0, nqc_flag: 0, page_id: 1, grp: 1 });
+    return request('request', 'music.search.SearchCgiService', desktop ? 'DoSearchForQQMusicDesktop' : 'DoSearchForQQMusicLite', params, state, context, !desktop);
+  }
+  function searchFallback(state, context) {
+    const hops = state.searchHops || 1;
+    return state.searchTransport === 'desktop' && hops < 4 ? searchRequest(Object.assign({}, state, {
+      searchTransport: 'lite', searchHops: hops + 1,
+    }), context) : null;
+  }
+  function searchId(type) {
+    // Public request correlation follows the website formula; this is not key/IV entropy.
+    const kind = { track: 3, album: 4, playlist: 6, artist: 1 }[type];
+    const now = new Date();
+    const millis = 1000 * (3600 * now.getHours() + 60 * now.getMinutes() + now.getSeconds()) + now.getMilliseconds();
+    return (BigInt(kind) * 18014398509481984n + BigInt(Math.round(Math.random() * 4194304)) * 4294967296n + BigInt(millis)).toString();
   }
   const operations = {
     'feed.home': feed, 'feed.discover': feed,
@@ -435,6 +466,9 @@ import { sha1 } from '@noble/hashes/legacy.js';
       const types = { track: 0, artist: 1, album: 2, playlist: 3 };
       if (!Object.hasOwn(types, state.type)) return failure('UNSUPPORTED');
       state.searchType = types[state.type];
+      state.searchTransport = requireAuth(context) ? 'lite' : 'desktop';
+      state.searchId = searchId(state.type);
+      state.searchHops = 1;
       state.fetchSize = Math.max(20, state.limit || 20);
       state.searchOffset = state.offset;
       return searchRequest(state, context);
@@ -484,11 +518,23 @@ import { sha1 } from '@noble/hashes/legacy.js';
   operations.onResponse = function (operation, response, state, context) {
     if (state.sessionTag && state.sessionTag !== sessionTag(context)) return authError(context);
     const data = readResponse(response, state.key, context, state.allowEmpty, state.ag1);
-    if (data.error) return state.ownerPurpose === 'read' ? finish(state.readonlyPlaylist, state) : data;
+    if (data.error) {
+      if (state.stage === 'search' && ['AUTH_REQUIRED', 'AUTH_EXPIRED', 'UNAVAILABLE', 'INVALID_RESPONSE'].indexOf(data.error) >= 0) {
+        const fallback = searchFallback(state, context); if (fallback) return fallback;
+      }
+      return state.ownerPurpose === 'read' ? finish(state.readonlyPlaylist, state) : data;
+    }
     if (state.stage === 'search') {
-      const key = { track: 'item_song', artist: 'singer', album: 'item_album', playlist: 'item_songlist' }[state.type];
-      const rows = (data.body || {})[key];
-      if (!Array.isArray(rows)) return failure('INVALID_RESPONSE');
+      const desktop = state.searchTransport === 'desktop';
+      const key = (desktop ? { track: 'song', artist: 'singer', album: 'album', playlist: 'songlist' } :
+        { track: 'item_song', artist: 'singer', album: 'item_album', playlist: 'item_songlist' })[state.type];
+      const bucket = (data.body || {})[key];
+      const rows = desktop ? bucket && bucket.list : bucket;
+      if (!Array.isArray(rows)) return searchFallback(state, context) || failure('INVALID_RESPONSE');
+      const total = statusCode((data.meta || {}).sum);
+      // The website requires login but can return a success-shaped empty body
+      // instead of an auth code. Corroborate it through one anonymous Lite route.
+      if (desktop && rows.length === 0 && total === 0) return searchFallback(state, context) || failure('UNAVAILABLE');
       const convert = { track: function (value) { return track(value, context); }, artist: artist, album: album, playlist: playlist }[state.type];
       const items = state.searchItems || [];
       const start = Math.floor(state.searchOffset / state.fetchSize) * state.fetchSize;
@@ -498,7 +544,6 @@ import { sha1 } from '@noble/hashes/legacy.js';
         if (parsed) items.push(state.typed ? item(state.type, parsed) : parsed);
       }
       const next = start + consumed;
-      const total = statusCode((data.meta || {}).sum);
       const morePages = rows.length >= state.fetchSize && (total === null || total > start + rows.length);
       const hasMore = consumed < rows.length || morePages;
       const hops = state.searchHops || 1;
@@ -577,9 +622,11 @@ import { sha1 } from '@noble/hashes/legacy.js';
       return paged(data.albumList.map(album).filter(Boolean), state, data.total, undefined, data.albumList.length);
     }
     if (state.stage === 'account' || state.stage === 'liked-profile') {
-      if (!data.creator || !String(data.creator.uin || '') || !data.creator.nick) return failure('INVALID_RESPONSE');
-      if (state.stage === 'account') return finish({ accountId: String(data.creator.uin), displayName: text(data.creator.nick), avatarUrl: image(data.creator.headpic) }, state);
-      const favorite = (data.mymusic || []).find(function (value) { return Number(value.type) === 1; });
+      const owner = profileOwner(data, context, state);
+      if (!owner || typeof data.creator.nick !== 'string' || !data.creator.nick.trim()) return failure('INVALID_RESPONSE');
+      if (state.stage === 'account') return finish({ accountId: 'enc:' + owner.encryptedUin, displayName: text(data.creator.nick), avatarUrl: image(data.creator.headpic) }, state);
+      if (!Array.isArray(data.mymusic)) return failure('INVALID_RESPONSE');
+      const favorite = data.mymusic.find(function (value) { return value && Number(value.type) === 1; });
       if (!favorite || !/^\d{1,16}$/.test(String(favorite.id || ''))) return failure('INVALID_RESPONSE');
       return request('playlist', 'music.srfDissInfo.aiDissInfo', 'uniform_get_Dissinfo', { disstid: Number(favorite.id), song_begin: state.offset, song_num: state.limit, ctx: 1 }, Object.assign(state, { stage: 'liked-tracks' }), context, false);
     }
@@ -638,7 +685,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
       return id && editableDirectory(result.dirId) ? finish({ playlistId: id, title: state.title, artworkUrl: '', description: state.description, trackCount: 0 }, state) : failure('INVALID_RESPONSE');
     }
     if (state.stage === 'owner-profile') {
-      const owner = profileOwner(data, context);
+      const owner = profileOwner(data, context, state);
       if (!owner) return state.ownerPurpose === 'read' ? finish(state.readonlyPlaylist, state) : failure('UNSUPPORTED');
       const next = Object.assign({}, state, { owner: owner });
       if (state.ownerPurpose === 'library') return cgi('/rsc/fcgi-bin/fcg_user_created_diss', {
