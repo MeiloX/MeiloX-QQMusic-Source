@@ -1,0 +1,80 @@
+{
+  "id": "org.meilox.qqmusic",
+  "providerId": "qqmusic",
+  "name": "QQ 音乐",
+  "author": "MeiloX contributors",
+  "version": "0.2.0",
+  "apiVersion": 2,
+  "entry": "index.js",
+  "capabilities": [
+    "catalog.search",
+    "catalog.track",
+    "lyrics.get",
+    "playback.resolve",
+    "feed.home",
+    "feed.discover",
+    "playlist.get",
+    "playlist.tracks",
+    "album.get",
+    "album.tracks",
+    "artist.get",
+    "artist.tracks",
+    "artist.albums",
+    "account.get",
+    "library.likedTracks",
+    "library.createdPlaylists",
+    "library.savedPlaylists",
+    "library.savedAlbums",
+    "library.followedArtists",
+    "track.liked",
+    "track.like",
+    "collection.saved",
+    "collection.save",
+    "playlist.create",
+    "playlist.update",
+    "playlist.delete",
+    "playlist.addTracks",
+    "playlist.removeTracks"
+  ],
+  "permissions": {
+    "network": [
+      "u.y.qq.com",
+      "c.y.qq.com",
+      "y.gtimg.cn",
+      "music-file.y.qq.com",
+      "p.qpic.cn",
+      "qpic.y.qq.com",
+      "pic6.y.qq.com",
+      "thirdqq.qlogo.cn",
+      "q.qlogo.cn",
+      "ws6.stream.qqmusic.qq.com"
+    ],
+    "storage": true
+  },
+  "config": [
+    {
+      "key": "cookie",
+      "label": "本人 QQ 音乐网页 Cookie",
+      "secret": true,
+      "required": false
+    },
+    {
+      "key": "uin",
+      "label": "账号 ID（Cookie 中缺失时填写）",
+      "secret": false,
+      "required": false
+    }
+  ],
+  "description": "支持 QQ 音乐首页、发现、歌曲/歌单/专辑/歌手搜索及详情。本人账号、媒体库和收藏需要网页会话。\nCookie 填写本人登录 QQ 音乐网页版后的完整会话，不是 QQ 密码。电脑打开 y.qq.com 并登录，在「检查 → 网络」复制 u.y.qq.com 或 c.y.qq.com 请求的「请求标头 → Cookie」整段值。\n账号 ID 通常留空。失效后重新填写 Cookie。网页播放还受 QQ 音乐当前服务授权限制，配置会话不保证每首歌均可播放。",
+  "searchTypes": [
+    "track",
+    "playlist",
+    "album",
+    "artist"
+  ],
+  "collectionTypes": [
+    "playlist",
+    "album",
+    "artist"
+  ]
+}

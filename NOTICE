@@ -1,0 +1,9 @@
+MeiloX QQ Music Source
+Copyright 2026 MeiloX contributors.
+
+This independently implemented adapter was first developed in samples/qq-music-source
+of https://github.com/NEORUAA/MeiloX and is maintained here as a separate plugin.
+Its host contract follows the MeiloX source SDK.
+
+This project is licensed under GPL-3.0-only. See LICENSE.
+QQ Music trademarks and projected public catalog metadata remain with their owners.
