@@ -340,7 +340,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     const cookie = cookieText(context);
     if (/[\r\n\u0000]/.test(cookie)) return failure('INVALID_RESPONSE');
     const comm = webComm(context);
-    const values = Object.assign({ format: 'json', inCharset: 'utf-8', outCharset: 'utf-8', notice: 0, platform: 'yqq.json', g_tk: comm.g_tk, g_tk_new_20200303: comm.g_tk_new_20200303, loginUin: account(context).uin, hostUin: 0 }, params);
+    const values = Object.assign({ uin: comm.uin, cv: comm.cv, format: 'json', inCharset: 'utf-8', outCharset: 'utf-8', notice: 0, platform: 'yqq.json', g_tk: comm.g_tk, g_tk_new_20200303: comm.g_tk_new_20200303, loginUin: account(context).uin, hostUin: 0 }, params);
     const query = Object.keys(values).map(function (key) { return encodeURIComponent(key) + '=' + encodeURIComponent(String(values[key])); }).join('&');
     const headers = { Accept: 'application/json', Referer: 'https://y.qq.com/', 'User-Agent': UA };
     if (cookie) headers.Cookie = cookie;

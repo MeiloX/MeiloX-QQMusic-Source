@@ -251,7 +251,22 @@ assert.equal(profileRequest.hostname, 'c.y.qq.com');
 assert.equal(profileRequest.pathname, '/rsc/fcgi-bin/fcg_get_profile_homepage.fcg');
 assert.equal(profileRequest.searchParams.get('userid'), '0');
 assert.equal(profileRequest.searchParams.get('loginUin'), '123456');
+assert.equal(profileRequest.searchParams.get('uin'), '123456');
+assert.equal(profileRequest.searchParams.get('cv'), '4747474');
 assert.equal(profileRequest.searchParams.get('g_tk'), '510355573');
+for (const [config, expectedUin] of [
+  [{ cookie: 'uin=o000123456; qqmusic_key=fixture%40key' }, '123456'],
+  [{ cookie: 'uin=o123456; wxopenid=fixture-openid; wxuin=123456789012345678; qm_keyst=fixture-wechat-key' }, '123456789012345678'],
+]) {
+  const self = create(config, null, 2, () => ({ ...profile, data: { ...profile.data,
+    creator: { ...profile.data.creator, uin: expectedUin } } }));
+  assert.equal(self.call('account.get', {}).accountId, expectedUin);
+  const query = new URL(self.requests[0].url).searchParams;
+  assert.equal(query.get('uin'), expectedUin);
+  assert.equal(query.get('loginUin'), expectedUin);
+  assert.equal(query.get('cv'), '4747474');
+  assert.equal(query.get('userid'), '0');
+}
 assert.equal(personal.call('library.likedTracks', { offset: 0, limit: 3 }).items[0].type, 'track');
 const created = personal.call('library.createdPlaylists', { offset: 0, limit: 2 });
 assert.equal(created.items.length, 2);
