@@ -21,9 +21,35 @@ export function utf8Bytes(text) {
   return new Uint8Array(result);
 }
 export function utf8Text(bytes) {
-  let encoded = '';
-  for (const byte of bytes) encoded += '%' + byte.toString(16).padStart(2, '0');
-  return decodeURIComponent(encoded);
+  // Decode strictly in bounded UTF-16 blocks; a per-byte percent-encoded rope can
+  // exhaust the host's isolate heap before decodeURIComponent validates UTF-8.
+  const block = new Uint16Array(4096), chunks = [];
+  let used = 0;
+  const flush = () => { chunks.push(String.fromCharCode.apply(null, block.subarray(0, used))); used = 0; };
+  const continuation = index => {
+    if (index >= bytes.length || (bytes[index] & 0xc0) !== 0x80) throw new URIError('Invalid UTF-8');
+    return bytes[index] & 0x3f;
+  };
+  for (let index = 0; index < bytes.length;) {
+    const first = bytes[index++];
+    let point;
+    if (first < 0x80) point = first;
+    else if (first >= 0xc2 && first <= 0xdf) point = (first & 0x1f) << 6 | continuation(index++);
+    else if (first >= 0xe0 && first <= 0xef) {
+      const second = continuation(index++), third = continuation(index++);
+      if (first === 0xe0 && second < 0x20 || first === 0xed && second >= 0x20) throw new URIError('Invalid UTF-8');
+      point = (first & 0x0f) << 12 | second << 6 | third;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+      const second = continuation(index++), third = continuation(index++), fourth = continuation(index++);
+      if (first === 0xf0 && second < 0x10 || first === 0xf4 && second >= 0x10) throw new URIError('Invalid UTF-8');
+      point = (first & 7) << 18 | second << 12 | third << 6 | fourth;
+    } else throw new URIError('Invalid UTF-8');
+    if (used + (point > 0xffff ? 2 : 1) > block.length) flush();
+    if (point > 0xffff) { point -= 0x10000; block[used++] = 0xd800 | point >> 10; block[used++] = 0xdc00 | point & 0x3ff; }
+    else block[used++] = point;
+  }
+  if (used) flush();
+  return chunks.join('');
 }
 export function base64(bytes) {
   let result = '';

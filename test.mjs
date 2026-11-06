@@ -376,6 +376,22 @@ for (const message of ['plain ASCII', '中文 😀', '\ud800', '\udc00', 'quote 
   assert.deepEqual(Buffer.from(utf8Bytes(message)), Buffer.from(message, 'utf8'));
   assert.equal(utf8Text(utf8Bytes(message)), Buffer.from(message, 'utf8').toString('utf8'));
 }
+// Cover strict UTF-8 boundaries, including pairs spanning a decoder block.
+const utf8Boundaries = String.fromCodePoint(0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000, 0xffff, 0x10000, 0x10ffff);
+for (const message of [utf8Boundaries, 'a'.repeat(4095) + '😀中', '中😀x'.repeat(65536)]) {
+  assert.equal(utf8Text(new Uint8Array(Buffer.from(message))), message);
+}
+for (const bytes of [
+  [0x80], [0xbf], [0xc0, 0x80], [0xc1, 0xbf], [0xc2], [0xc2, 0x7f],
+  [0xe0, 0x9f, 0xbf], [0xe0, 0xa0], [0xed, 0xa0, 0x80], [0xef, 0xbf],
+  [0xf0, 0x8f, 0xbf, 0xbf], [0xf0, 0x90, 0x80], [0xf4, 0x90, 0x80, 0x80],
+  [0xf5, 0x80, 0x80, 0x80], [0xff], [0xe2, 0x28, 0xa1],
+]) assert.throws(() => utf8Text(new Uint8Array(bytes)), URIError);
+// A host-sized Unicode response exercises the shipped binary decoder, not only
+// the small upstream vectors. Keep the synthetic content free of account data.
+const largePublicBody = JSON.stringify({ code: 0, data: { text: '中😀x'.repeat(65536) } });
+const largeResponse = hostResponse({ responseEncoding: 'base64' }, JSON.parse(largePublicBody));
+assert.equal(decodeHostResponse(largeResponse).body, largePublicBody);
 const random = randomBytes(256);
 assert.deepEqual(Buffer.from(unbase64(base64(random))), random);
 const plainRequest = { url: 'https://u.y.qq.com/cgi-bin/musicu.fcg', method: 'POST', headers: {}, body: '{"code":0}' };
