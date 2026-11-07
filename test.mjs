@@ -211,11 +211,36 @@ for (const type of ['artist', 'album', 'playlist']) {
   assert.ok(page.items.every(value => value.type === type));
 }
 const home = catalog.call('feed.home', { offset: 0, limit: 3 });
-assert.deepEqual(home.sections.map(section => section.id), ['recommend', 'songs', 'albums', 'charts']);
+assert.deepEqual(home.sections.map(section => section.id), ['recommend', 'songs', 'albums']);
 assert.ok(home.sections.every(section => section.items.length > 0));
 const recommended = home.sections[0].items[0].playlist;
 assert.equal(recommended.playlistId, '8044204090');
 assert.equal(catalog.call('playlist.get', { playlistId: recommended.playlistId }).title, recommended.title);
+assert.equal(recommended.playCount, undefined);
+for (const field of ['access_num', 'listennum', 'listen_num']) {
+  for (const count of [0, 4500000000, '4500000000']) {
+    const counted = structuredClone(publicFixtures.playlist);
+    counted.playlist.data.dirinfo[field] = count;
+    assert.equal(create({}, null, 2, () => counted).call('playlist.get', { playlistId: recommended.playlistId }).playCount, Number(count));
+  }
+}
+for (const count of [undefined, null, -1, 1.5, true, 'unknown', Number.MAX_SAFE_INTEGER + 1]) {
+  const unknown = structuredClone(publicFixtures.playlist);
+  unknown.playlist.data.dirinfo.listennum = count;
+  assert.equal(create({}, null, 2, () => unknown).call('playlist.get', { playlistId: recommended.playlistId }).playCount, undefined);
+}
+const countedHome = create({}, null, 2, (request, state) => {
+  const response = structuredClone(publicResponse(request, state));
+  if (state.stage === 'feed') response.recommend.data.List[0].Playlist.basic.access_num = 4500000000;
+  return response;
+}).call('feed.home', { offset: 0, limit: 3 });
+assert.equal(countedHome.sections[0].items[0].playlist.playCount, 4500000000);
+const countedDiscovery = create({}, null, 2, (request, state) => {
+  const response = structuredClone(publicResponse(request, state));
+  if (state.stage === 'feed') response.category.data.v_playlist[0].listen_num = 0;
+  return response;
+}).call('feed.discover', { offset: 0, limit: 3 });
+assert.equal(countedDiscovery.sections[0].items[0].playlist.playCount, 0);
 const playlistTracks = catalog.call('playlist.tracks', { playlistId: recommended.playlistId, offset: 0, limit: 3 });
 assert.equal(playlistTracks.items.length, 3);
 assert.equal(playlistTracks.items[0].trackId, '002eDlpu4U223F');
@@ -225,13 +250,102 @@ filteredPageFixture.playlist.data.songlist[1].mid = '';
 const filteredPage = create({}, null, 2, () => filteredPageFixture).call('playlist.tracks', { playlistId: recommended.playlistId, offset: 0, limit: 3 });
 assert.equal(filteredPage.items.length, 2);
 assert.equal(filteredPage.nextCursor, '3');
-const chart = home.sections.find(section => section.id === 'charts').items[0].playlist;
+assert.equal(home.sections[0].layout, 'hero');
+assert.deepEqual(home.categories, []);
+assert.equal(home.hasMore, false);
+assert.equal(home.nextCursor, undefined);
+const newAlbums = catalog.call('feed.discover', { categoryId: 'albums', offset: 0, limit: 3 });
+assert.equal(newAlbums.hasMore, true);
+assert.equal(newAlbums.nextCursor, '3');
+const discover = catalog.call('feed.discover', { offset: 0, limit: 3 });
+assert.deepEqual(discover.sections.map(section => section.id), ['category']);
+assert.equal(discover.categories[0].id, '3317');
+const chart = catalog.call('feed.discover', { categoryId: 'charts', offset: 0, limit: 3 }).sections[0].items[0].playlist;
 assert.equal(chart.playlistId, 'chart:62');
 assert.equal(catalog.call('playlist.get', { playlistId: chart.playlistId }).playlistId, chart.playlistId);
 assert.equal(catalog.call('playlist.tracks', { playlistId: chart.playlistId, offset: 0, limit: 3 }).items.length, 3);
 const album = home.sections.find(section => section.id === 'albums').items[0].album;
 assert.equal(catalog.call('album.get', { albumId: album.albumId }).albumId, album.albumId);
 assert.equal(catalog.call('album.tracks', { albumId: album.albumId, offset: 0, limit: 3 }).items.length, 2);
+const albumId = publicFixtures.album.album.data.basicInfo.albumMid;
+const fullAlbumSongs = Array.from({ length: 45 }, (_, index) => ({ songInfo: {
+  ...publicFixtures['album-tracks'].albumTracks.data.songList[0].songInfo,
+  mid: 'AlbumTrack' + index, title: 'Album recording ' + index,
+} }));
+let countState;
+const fullAlbum = create({}, null, 2, (request, state) => {
+  if (state.stage === 'album.get') return publicFixtures.album;
+  assert.equal(state.stage, 'album.tracks');
+  const params = requestPayload(request).albumTracks.param;
+  if (state.albumMetadata) {
+    countState = structuredClone(state);
+    assert.equal(params.num, 1);
+    assert.equal(params.begin, 0);
+    assert.equal(request.errorResponse, true);
+  }
+  return { code: 0, albumTracks: { code: 0, data: {
+    albumMid: albumId, totalNum: fullAlbumSongs.length,
+    songList: fullAlbumSongs.slice(params.begin, params.begin + params.num),
+  } } };
+});
+assert.equal(fullAlbum.call('album.get', { albumId }).trackCount, 45);
+assert.equal(fullAlbum.requests.length, 2, 'Only missing album totals need one small count request');
+const firstAlbumPage = fullAlbum.call('album.tracks', { albumId, offset: 0, limit: 30 });
+assert.equal(firstAlbumPage.items.length, 30);
+assert.equal(firstAlbumPage.hasMore, true);
+assert.equal(firstAlbumPage.nextCursor, '30');
+const secondAlbumPage = fullAlbum.call('album.tracks', { albumId, offset: 30, cursor: firstAlbumPage.nextCursor, limit: 30 });
+assert.equal(secondAlbumPage.items.length, 15);
+assert.equal(secondAlbumPage.hasMore, false);
+assert.equal(secondAlbumPage.nextCursor, undefined);
+assert.deepEqual([...firstAlbumPage.items, ...secondAlbumPage.items].map(value => value.trackId), fullAlbumSongs.map(value => value.songInfo.mid));
+for (const field of ['totalNum', 'song_num']) {
+  for (const count of [0, '0', 45, '45']) {
+    const response = structuredClone(publicFixtures.album);
+    response.album.data.basicInfo[field] = count;
+    const knownAlbum = create({}, null, 2, () => response);
+    assert.equal(knownAlbum.call('album.get', { albumId }).trackCount, Number(count));
+    assert.equal(knownAlbum.requests.length, 1, 'A known zero is not a missing album total');
+  }
+}
+for (const count of [0, '0']) {
+  const emptyAlbum = create({}, null, 2, (_, state) => state.stage === 'album.get' ? publicFixtures.album :
+    { code: 0, albumTracks: { code: 0, data: { albumMid: albumId, totalNum: count, songList: [] } } });
+  assert.equal(emptyAlbum.call('album.get', { albumId }).trackCount, 0);
+  assert.equal(emptyAlbum.requests.length, 2);
+}
+const topLevelCount = structuredClone(publicFixtures.album);
+topLevelCount.album.data.totalNum = 45;
+const topLevelAlbum = create({}, null, 2, () => topLevelCount);
+assert.equal(topLevelAlbum.call('album.get', { albumId }).trackCount, 45);
+assert.equal(topLevelAlbum.requests.length, 1);
+const optionalCountFailure = create({}, null, 2, (_, state) => state.stage === 'album.get' ? publicFixtures.album : { code: 1000 });
+const retainedAlbum = optionalCountFailure.call('album.get', { albumId });
+assert.equal(retainedAlbum.albumId, albumId);
+assert.equal(retainedAlbum.trackCount, undefined);
+assert.equal(optionalCountFailure.requests.length, 2);
+const countCallback = vm.createContext({});
+vm.runInContext(source, countCallback, { timeout: 1000 });
+countCallback.state = countState;
+countCallback.context = pluginContext(2, {}, {});
+for (const error of ['NETWORK', 'TIMEOUT']) {
+  countCallback.response = { status: 0, body: '', error };
+  const fallback = JSON.parse(vm.runInContext('JSON.stringify(sourcePlugin.onResponse("album.get", response, state, context))', countCallback, { timeout: 1000 }));
+  assert.equal(fallback.result.albumId, albumId);
+  assert.equal(fallback.result.trackCount, undefined);
+}
+for (const count of [undefined, null, -1, 1.5, true, 'unknown', 2147483648]) {
+  const unknownAlbum = create({}, null, 2, (_, state) => {
+    if (state.stage === 'album.get') {
+      const response = structuredClone(publicFixtures.album);
+      response.album.data.basicInfo.totalNum = count;
+      return response;
+    }
+    return { code: 0, albumTracks: { code: 0, data: { albumMid: albumId, totalNum: count, songList: [] } } };
+  });
+  assert.equal(unknownAlbum.call('album.get', { albumId }).trackCount, undefined);
+  assert.equal(unknownAlbum.requests.length, 2);
+}
 assert.equal(catalog.call('artist.get', { artistId: '0025NhlN2yWrP4' }).name, '周杰伦');
 assert.equal(catalog.call('artist.tracks', { artistId: '0025NhlN2yWrP4', offset: 0, limit: 3 }).items[0].trackId, trackId);
 assert.equal(catalog.call('artist.albums', { artistId: '0025NhlN2yWrP4', offset: 0, limit: 3 }).items[0].albumId, '0041WVfh2vtlJE');
@@ -694,3 +808,52 @@ assert.equal(partialSearch.items.length, 3);
 assert.equal(partialSearch.hasMore, true);
 assert.equal(partialSearch.nextCursor, '60');
 console.log('QQ search transports: official authenticated Desktop schemas and bounded anonymous Lite corroboration passed offline.');
+
+// New successful QQ acknowledgement fields must be corroborated, not accepted blindly.
+for (const liked of [true, false]) for (const acknowledgement of [
+  { result: 0, song_count: 1 }, { accepted: true }, { result: { applied: true } },
+]) {
+  const verified = create(session, null, 2, (request, state) => {
+    if (state.stage === 'mutation') return { code: 0, mutation: { code: 0, data: acknowledgement } };
+    if (state.stage === 'like-verified') return { code: 0, liked: { code: 0, data: { m_fan: { [trackId]: liked ? 1 : 0 } } } };
+    return privateResponse(request, state);
+  });
+  assert.equal(verified.call('track.like', { trackId, liked }), true);
+  assert.equal(verified.requests.length, 3);
+  assert.equal(requestPayload(verified.requests.at(-1)).liked.method, 'IsSongFanByMid');
+}
+for (const liked of [true, false]) {
+  const unchanged = create(session, null, 2, (request, state) => {
+    if (state.stage === 'mutation') return { code: 0, mutation: { code: 0, data: { unknownAck: true } } };
+    if (state.stage === 'like-verified') return { code: 0, liked: { code: 0, data: { m_fan: { [trackId]: liked ? 0 : 1 } } } };
+    return privateResponse(request, state);
+  });
+  assert.deepEqual(unchanged.call('track.like', { trackId, liked }), { error: 'UNAVAILABLE' });
+}
+for (const response of [{ m_fan: {} }, { m_fan: { [trackId]: 'unknown' } }, {}]) {
+  const malformed = create(session, null, 2, (request, state) => {
+    if (state.stage === 'mutation') return { code: 0, mutation: { code: 0, data: { unknownAck: true } } };
+    if (state.stage === 'like-verified') return { code: 0, liked: { code: 0, data: response } };
+    return privateResponse(request, state);
+  });
+  assert.deepEqual(malformed.call('track.like', { trackId, liked: true }), { error: 'INVALID_RESPONSE' });
+}
+console.log('QQ favorite acknowledgements: ambiguous successful writes require an exact canonical readback.');
+
+// Batch favorite reads publish only complete, requested canonical states.
+const favoriteIds = [trackId, 'BatchSong2'];
+const batchLikes = create(session, null, 2, request => {
+  assert.deepEqual(requestPayload(request).liked.param.v_songMid, favoriteIds);
+  return { code: 0, liked: { code: 0, data: { m_fan: { [trackId]: '1', BatchSong2: 0 } } } };
+});
+assert.deepEqual(batchLikes.call('track.liked', { trackIds: favoriteIds }), { items: [{ trackId, liked: true }, { trackId: 'BatchSong2', liked: false }] });
+for (const flags of [{ [trackId]: 1 }, { [trackId]: 1, BatchSong2: 'unknown' }, { [trackId]: 1, OtherSong: 0 }]) {
+  const badBatch = create(session, null, 2, () => ({ code: 0, liked: { code: 0, data: { m_fan: flags } } }));
+  assert.deepEqual(badBatch.call('track.liked', { trackIds: favoriteIds }), { error: 'INVALID_RESPONSE' });
+}
+for (const options of [{ privacy: true }, { privacy: 'false' }, { type: 'VIDEO' }, { type: 'SHARED' }]) {
+  const unsupported = create(session, null, 2);
+  assert.deepEqual(unsupported.call('playlist.create', { title: 'Fixture', ...options }), { error: 'UNSUPPORTED' });
+  assert.equal(unsupported.requests.length, 0);
+}
+console.log('QQ favorite batch reads and playlist privacy: complete states and unsupported options enforced offline.');

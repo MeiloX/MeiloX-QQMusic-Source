@@ -21,7 +21,7 @@ const probes = [
 const integer = value => typeof value === 'number' && Number.isSafeInteger(value) ? value :
   typeof value === 'string' && /^-?\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 const context = () => ({ apiVersion: 2, config: {}, storage: {}, secureRandomBase64: randomBytes(256).toString('base64') });
-for (const [operation, params] of probes) {
+for (const [operation, params] of (process.argv.includes('--feeds') ? probes.filter(([operation]) => operation.startsWith('feed.')) : probes)) {
   const isolated = vm.createContext({});
   vm.runInContext(source, isolated, { timeout: 1000 });
   isolated.params = params; isolated.op = operation; isolated.context = context();
@@ -49,5 +49,6 @@ for (const [operation, params] of probes) {
     value = JSON.parse(vm.runInContext('JSON.stringify(sourcePlugin.onResponse(op, response, state, context))', isolated, { timeout: 1000 }));
   }
   assert.ok(value && !value.error && value.result !== undefined, 'Public QQ catalog callback rejected its response');
+  if (operation.startsWith('feed.')) assert.ok(value.result.sections?.some(section => section.items?.length > 0), 'Public QQ feed has no projected content');
 }
 console.log('Anonymous public catalog checks passed; no account or playback URL was requested.');

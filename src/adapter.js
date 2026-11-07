@@ -298,6 +298,12 @@ import { sha1 } from '@noble/hashes/legacy.js';
     return finish(result, state);
   }
   function item(type, value) { const result = { type: type }; result[type] = value; return result; }
+  function playlistPlayCount(value) {
+    const raw = value.access_num ?? value.listennum ?? value.listen_num;
+    if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^\d+$/.test(raw))) return null;
+    const count = Number(raw);
+    return Number.isSafeInteger(count) && count >= 0 ? count : null;
+  }
   function playlist(value, own) {
     if (!value) return null;
     const id = String(value.tid || value.id || value.dissid || '');
@@ -312,6 +318,8 @@ import { sha1 } from '@noble/hashes/legacy.js';
     };
     const count = value.songnum === undefined ? value.song_cnt === undefined ? value.song_num : value.song_cnt : value.songnum;
     if (Number.isFinite(Number(count)) && Number(count) >= 0) result.trackCount = Number(count);
+    const playCount = playlistPlayCount(value);
+    if (playCount !== null) result.playCount = playCount;
     if (own === true && editableDirectory(value.dirid || value.dirId)) result.editableActions = EDIT_ACTIONS.slice();
     return result;
   }
@@ -331,9 +339,16 @@ import { sha1 } from '@noble/hashes/legacy.js';
       return result;
     }).filter(function (artist) { return artist.name; }) : String(singers).split('/').filter(Boolean).map(function (name) { return { name: text(name) }; });
     const result = { albumId: id, title: title, artists: artists, artworkUrl: image(value.pic || value.albumPic || value.imgurl || value.logo) || photo('T002', value.pmid || (value.photo || {}).pic_mid || id), description: text(value.desc || (value.ex || {}).desc) };
-    const count = value.totalNum === undefined ? value.song_num : value.totalNum;
-    if (Number(count) > 0) result.trackCount = Number(count);
+    const count = albumTrackCount(value);
+    if (count !== null) result.trackCount = count;
     return result;
+  }
+  function albumTrackCount(value) {
+    for (const key of ['totalNum', 'song_num']) {
+      const count = statusCode(value[key]);
+      if (count !== null && count >= 0 && count <= 2147483647) return count;
+    }
+    return null;
   }
   function artist(value) {
     if (!value) return null;
@@ -408,17 +423,17 @@ import { sha1 } from '@noble/hashes/legacy.js';
     if (operation === 'library.savedPlaylists' || operation === 'library.savedAlbums') return cgi('/fav/fcgi-bin/fcg_get_profile_order_asset.fcg', { ct: 20, cid: 205360956, userid: login.uin, reqtype: operation === 'library.savedPlaylists' ? 3 : 2, sin: state.offset, ein: state.offset + state.limit - (operation === 'library.savedAlbums' ? 1 : 0) }, state, context);
     return request('library', 'music.concern.RelationList', 'GetFollowSingerList', { From: state.offset, Size: state.limit, HostUin: '' }, state, context, false);
   }
-  function feed(params, context) {
-    const state = Object.assign(page(params), { stage: 'feed', categoryId: String(params.categoryId || '') });
-    const nodes = { categories: moduleCall('music.web_category_svr', 'get_hot_category', { location: 0 }) };
+  function feed(params, context, kind) {
+    const state = Object.assign(page(params), { stage: 'feed', feedKind: kind, categoryId: String(params.categoryId || (kind === 'discover' ? '3317' : '')) });
+    const nodes = kind === 'discover' ? { categories: moduleCall('music.web_category_svr', 'get_hot_category', { location: 0 }) } : {};
     if (/^\d{1,8}$/.test(state.categoryId)) {
       nodes.category = moduleCall('playlist.PlayListPlazaServer', 'get_playlist_by_category', { id: Number(state.categoryId), curPage: Math.floor(state.offset / state.limit) + 1, size: state.limit, order: 5, titleid: Number(state.categoryId) });
     } else {
       if (!state.categoryId || state.categoryId === 'recommend') nodes.recommend = moduleCall('music.playlist.PlaylistSquare', 'GetRecommendFeed', { From: state.offset, Size: state.limit });
       if (!state.categoryId || state.categoryId === 'tracks') nodes.songs = moduleCall('newsong.NewSongServer', 'get_new_song_info', { type: 5 });
       if (!state.categoryId || state.categoryId === 'albums') nodes.albums = moduleCall('newalbum.NewAlbumServer', 'get_new_album_info', { area: 1, sin: state.offset, num: state.limit });
-      if (!state.categoryId || state.categoryId === 'charts') nodes.charts = moduleCall('musicToplist.ToplistInfoServer', 'GetAll', {});
-      if (Object.keys(nodes).length === 1) return failure('UNSUPPORTED');
+      if (state.categoryId === 'charts') nodes.charts = moduleCall('musicToplist.ToplistInfoServer', 'GetAll', {});
+      if (Object.keys(nodes).length === (kind === 'discover' ? 1 : 0)) return failure('UNSUPPORTED');
     }
     return batch(nodes, state, context, false);
   }
@@ -427,6 +442,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     if (operation === 'playlist.create') {
       const title = String(params.title || '').trim(); const desc = String(params.description || '');
       if (!title || title.length > 20 || desc.length > 2000) return failure('UNSUPPORTED');
+      if ((params.privacy !== undefined && params.privacy !== false) || (params.type !== undefined && params.type !== 'NORMAL')) return failure('UNSUPPORTED');
       return request('mutation', 'music.musicasset.PlaylistBaseWrite', 'AddPlaylist', { dirName: title, dirDesc: desc, dirPicUrl: '', taglist: '', dirShow: 1 }, { stage: 'created', title: title, description: desc, sessionTag: sessionTag(context) }, context, false);
     }
     if (operation === 'track.like') return detail(params.trackId, 'like-detail', context, { liked: params.liked === true, sessionTag: sessionTag(context) });
@@ -460,7 +476,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     return (BigInt(kind) * 18014398509481984n + BigInt(Math.round(Math.random() * 4194304)) * 4294967296n + BigInt(millis)).toString();
   }
   const operations = {
-    'feed.home': feed, 'feed.discover': feed,
+    'feed.home': function (params, context) { return feed(params, context, 'home'); }, 'feed.discover': function (params, context) { return feed(params, context, 'discover'); },
     'catalog.search': function (params, context) {
       const state = Object.assign(page(params), { stage: 'search', type: params.type || 'track', typed: Number(context.apiVersion) >= 2, query: String(params.query || '').trim() });
       const types = { track: 0, artist: 1, album: 2, playlist: 3 };
@@ -504,6 +520,11 @@ import { sha1 } from '@noble/hashes/legacy.js';
     },
     'track.liked': function (params, context) {
       const denied = requireAuth(context); if (denied) return denied;
+      if (params.trackIds !== undefined) {
+        const ids = params.trackIds;
+        if (!Array.isArray(ids) || ids.length < 1 || ids.length > 100 || ids.some(function (id) { return typeof id !== 'string' || !mid(id); }) || new Set(ids).size !== ids.length) return failure('UNSUPPORTED');
+        return request('liked', 'music.musicasset.SongFavRead', 'IsSongFanByMid', { v_songMid: ids }, { stage: 'saved-tracks', ids: ids }, context, false);
+      }
       return mid(params.trackId) ? request('liked', 'music.musicasset.SongFavRead', 'IsSongFanByMid', { v_songMid: [params.trackId] }, { stage: 'saved', type: 'track', id: params.trackId }, context, false) : failure('NOT_FOUND');
     },
     'collection.saved': function (params, context) { return collection(params, context, false); },
@@ -519,6 +540,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     if (state.sessionTag && state.sessionTag !== sessionTag(context)) return authError(context);
     const data = readResponse(response, state.key, context, state.allowEmpty, state.ag1);
     if (data.error) {
+      if (state.stage === 'album.tracks' && state.albumMetadata) return finish(state.albumMetadata, state);
       if (state.stage === 'search' && ['AUTH_REQUIRED', 'AUTH_EXPIRED', 'UNAVAILABLE', 'INVALID_RESPONSE'].indexOf(data.error) >= 0) {
         const fallback = searchFallback(state, context); if (fallback) return fallback;
       }
@@ -557,9 +579,9 @@ import { sha1 } from '@noble/hashes/legacy.js';
     }
     if (state.stage === 'feed') {
       const sections = []; const errors = [];
-      const categories = [{ id: 'recommend', title: '推荐' }, { id: 'charts', title: '排行榜' }, { id: 'tracks', title: '新歌' }, { id: 'albums', title: '新碟' }];
+      const categories = state.feedKind === 'discover' ? [{ id: '3317', title: '官方歌单' }, { id: 'charts', title: '排行榜' }, { id: 'tracks', title: '新歌' }, { id: 'albums', title: '新碟' }] : [];
       const categoryData = node(data, 'categories', context);
-      if (!categoryData.error) (categoryData.category || []).forEach(function (group) { (group.items || []).forEach(function (value) { if (!categories.some(function (entry) { return entry.id === String(value.item_id); })) categories.push({ id: String(value.item_id), title: text(value.item_name) }); }); });
+      if (state.feedKind === 'discover' && !categoryData.error) (categoryData.category || []).forEach(function (group) { (group.items || []).forEach(function (value) { if (!categories.some(function (entry) { return entry.id === String(value.item_id); })) categories.push({ id: String(value.item_id), title: text(value.item_name) }); }); });
       let more = false;
       function section(key, title, layout, rows, convert, type) {
         const items = rows.map(function (value) { const parsed = convert(value); return parsed && item(type, parsed); }).filter(Boolean);
@@ -568,15 +590,17 @@ import { sha1 } from '@noble/hashes/legacy.js';
       ['recommend', 'songs', 'albums', 'charts', 'category'].forEach(function (key) {
         if (!data[key]) return;
         const value = node(data, key, context); if (value.error) { errors.push(value); return; }
-        if (key === 'recommend') { section(key, '为你推荐', 'playlists', (value.List || []).map(function (entry) { return ((entry.Playlist || {}).basic); }).filter(Boolean), playlist, 'playlist'); more = more || value.HasMore === true; }
+        if (key === 'recommend') { section(key, '为你推荐', state.feedKind === 'home' ? 'hero' : 'playlists', (value.List || []).map(function (entry) { return ((entry.Playlist || {}).basic); }).filter(Boolean), playlist, 'playlist'); more = more || value.HasMore === true; }
         if (key === 'songs') { const rows = value.songlist || []; section(key, '新歌', 'tracks', rows.slice(state.offset, state.offset + state.limit), function (song) { return track(song, context); }, 'track'); more = more || state.offset + state.limit < rows.length; }
         if (key === 'albums') { section(key, '新碟', 'albums', value.albums || [], album, 'album'); more = more || state.offset + state.limit < Number(value.total); }
         if (key === 'charts') { const rows = []; (value.group || []).forEach(function (group) { rows.push.apply(rows, group.toplist || []); }); section(key, '排行榜', 'playlists', rows.slice(state.offset, state.offset + state.limit), chart, 'playlist'); more = more || state.offset + state.limit < rows.length; }
         if (key === 'category') { section(key, (categories.find(function (entry) { return entry.id === state.categoryId; }) || {}).title || '歌单', 'playlists', value.v_playlist || [], playlist, 'playlist'); more = more || state.offset + state.limit < Number(value.total); }
       });
       if (!sections.length && errors.length) return errors[0];
-      const result = { sections: sections, categories: categories, hasMore: more };
-      if (more) result.nextCursor = String(state.offset + state.limit);
+      // Home is a complete recommendation preview; Discover owns catalog pagination.
+      const hasMore = state.feedKind === 'discover' && more;
+      const result = { sections: sections, categories: categories, hasMore: hasMore };
+      if (hasMore) result.nextCursor = String(state.offset + state.limit);
       return finish(result, state);
     }
     if (state.stage === 'detail') { const result = track(data.track_info, context); return result && result.trackId === state.trackId ? finish(result, state) : failure('NOT_FOUND'); }
@@ -585,7 +609,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
       if (!song || song.mid !== state.trackId) return failure('NOT_FOUND');
       if (state.stage === 'lyrics-detail') return request('lyric', 'music.musichallSong.PlayLyricInfo', 'GetPlayLyricInfo', { songMID: song.mid, songID: song.id, qrc: 0, qrc_t: 0, trans: 1, roma: 0, crypt: 0 }, { stage: 'lyrics', trackId: song.mid, guid: state.guid }, context, false);
       if (state.stage === 'like-detail' && !(Number(song.id) > 0)) return failure('NOT_FOUND');
-      if (state.stage === 'like-detail') return request('mutation', 'music.musicasset.PlaylistDetailWrite', state.liked ? 'AddSonglist' : 'DelSonglist', { dirId: 201, v_songInfo: [{ songType: Number(song.type) || 0, songId: song.id }] }, { stage: 'mutation', mutationSchema: 'code-only', allowEmpty: true, guid: state.guid, sessionTag: state.sessionTag }, context, false);
+      if (state.stage === 'like-detail') return request('mutation', 'music.musicasset.PlaylistDetailWrite', state.liked ? 'AddSonglist' : 'DelSonglist', { dirId: 201, v_songInfo: [{ songType: Number(song.type) || 0, songId: song.id }] }, { stage: 'mutation', mutationSchema: 'code-only', allowEmpty: true, guid: state.guid, sessionTag: state.sessionTag, verifyTrackId: state.trackId, expectedLiked: state.liked }, context, false);
       const denied = requireAuth(context); if (denied) return denied;
       return request('playback', 'music.vkey.GetEVkey', 'GetUrl', { guid: state.guid, songmid: [song.mid], songtype: [Number(song.type) || 0], uin: account(context).uin, loginflag: 1, platform: '20', xcdn: 1 }, { stage: 'playback', trackId: song.mid, file: song.file || {}, guid: state.guid }, context, false);
     }
@@ -607,7 +631,21 @@ import { sha1 } from '@noble/hashes/legacy.js';
     }
     if (state.stage === 'album.get') {
       const result = album(Object.assign({}, data.basicInfo, { singer: (data.singer || {}).singerList || [] }));
-      return result && result.albumId === state.id ? finish(result, state) : failure('NOT_FOUND');
+      if (!result || result.albumId !== state.id) return failure('NOT_FOUND');
+      const total = albumTrackCount(data);
+      if (result.trackCount === undefined && total !== null) result.trackCount = total;
+      if (result.trackCount !== undefined) return finish(result, state);
+      const countRequest = request('albumTracks', 'music.musichallAlbum.AlbumSongList', 'GetAlbumSongList',
+        { albumid: 0, albumMid: state.id, begin: 0, num: 1, order: 2 },
+        Object.assign({}, state, { stage: 'album.tracks', albumMetadata: result }), context, false);
+      if (!countRequest.request) return finish(result, state);
+      countRequest.request.errorResponse = true;
+      return countRequest;
+    }
+    if (state.stage === 'album.tracks' && state.albumMetadata) {
+      const total = albumTrackCount(data);
+      if (total !== null && (data.albumMid === undefined || data.albumMid === state.id)) state.albumMetadata.trackCount = total;
+      return finish(state.albumMetadata, state);
     }
     if (state.stage === 'artist.get') {
       const result = (data.singer_list || []).map(artist).find(function (value) { return value && value.artistId === state.id; });
@@ -670,6 +708,12 @@ import { sha1 } from '@noble/hashes/legacy.js';
     if (state.stage === 'library.followedArtists') {
       if (!Array.isArray(data.List)) return failure('INVALID_RESPONSE');
       return paged(data.List.map(artist).filter(Boolean).map(function (value) { return item('artist', value); }), state, data.Total, data.HasMore === true, data.List.length);
+    }
+    if (state.stage === 'saved-tracks') {
+      const flags = data.m_fan;
+      if (!object(flags) || Object.keys(flags).length !== state.ids.length || Object.keys(flags).some(function (id) { return state.ids.indexOf(id) < 0; })) return failure('INVALID_RESPONSE');
+      if (state.ids.some(function (id) { return !Object.hasOwn(flags, id) || [true, false, 0, 1, '0', '1'].indexOf(flags[id]) < 0; })) return failure('INVALID_RESPONSE');
+      return finish({ items: state.ids.map(function (id) { return { trackId: id, liked: flags[id] === true || flags[id] === 1 || flags[id] === '1' }; }) }, state);
     }
     if (state.stage === 'saved') {
       const flags = state.type === 'artist' ? data.map_singer_status : data.m_fan;
@@ -737,7 +781,22 @@ import { sha1 } from '@noble/hashes/legacy.js';
     }
     if (state.stage === 'mutation') {
       const error = confirmedMutation(data, state.mutationSchema);
+      // A successful QQ child status can carry a newer acknowledgement shape.
+      // Confirm the requested state by reading its canonical flag before reporting success.
+      if (error && error.error === 'INVALID_RESPONSE' && operation === 'track.like' && mid(state.verifyTrackId)) {
+        return request('liked', 'music.musicasset.SongFavRead', 'IsSongFanByMid', { v_songMid: [state.verifyTrackId] },
+          { stage: 'like-verified', trackId: state.verifyTrackId, expectedLiked: state.expectedLiked,
+            guid: state.guid, sessionTag: state.sessionTag }, context, false);
+      }
       return error || finish(true, state);
+    }
+    if (state.stage === 'like-verified') {
+      const flags = data.m_fan;
+      if (!object(flags) || !Object.hasOwn(flags, state.trackId)) return failure('INVALID_RESPONSE');
+      const flag = flags[state.trackId];
+      if ([true, false, 0, 1, '0', '1'].indexOf(flag) < 0) return failure('INVALID_RESPONSE');
+      const liked = flag === true || flag === 1 || flag === '1';
+      return liked === state.expectedLiked ? finish(true, state) : failure('UNAVAILABLE');
     }
     return failure('INVALID_RESPONSE');
   };
