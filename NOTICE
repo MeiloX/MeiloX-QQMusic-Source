@@ -7,6 +7,21 @@ Its host contract follows the MeiloX source SDK.
 
 This project is licensed under GPL-3.0-only. See LICENSE.
 QQ Music trademarks and projected public catalog metadata remain with their owners.
+The fixed QQ OAuth login recipe and credential names follow QQ Music's public
+common.chunk.5b378f933e2203b7da48.js and official HTTPS OAuth/callback pages.
+The QR login entry uses the official Graph show?which=Login wrapper and its
+style-40 XUI iframe, with the y.qq.com/wx_redirect callback, Graph login_jump
+return target and full-height official QR flow.
+Mobile login and artwork resource grants use maintained official-root QQ, GTimg
+(`*.gtimg.com`/`*.gtimg.cn`), CDN-go, Qpic
+and idqqimg subtrees, covering the public XUI page, connect.qq.com return target,
+and jsapi/open.mobile.qq.com script resources; the wildcard also covers any
+official connect.qq.com transition.
+Cookie extraction remains concrete and limited to the y.qq/i2 callback plus
+Graph/XUI/QQ authorization hosts; intermediate pt_* names remain excluded.
+No QQ Music login-page code is bundled; the host opens those official pages.
+QQ audio resources use the declared *.stream.qqmusic.qq.com subtree; the source
+and host enforce its DNS-label boundary without forwarding account Cookies.
 
 Third-party components bundled into index.js:
 

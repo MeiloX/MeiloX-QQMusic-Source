@@ -46,6 +46,12 @@ function create(config = {}, playback = null, apiVersion = 1, respond = null) {
   let storage = {};
   return {
     requests,
+    storageSnapshot() { return structuredClone(storage); },
+    advanceClock(milliseconds) {
+      isolated.clockStep = milliseconds;
+      vm.runInContext('Date.now = ((now, offset) => () => now() + offset)(Date.now, clockStep)', isolated, { timeout: 1000 });
+      delete isolated.clockStep;
+    },
     call(operation, params) {
       isolated.operation = operation;
       isolated.params = params;
@@ -105,7 +111,7 @@ assert.equal(payload.comm.g_tk, 510355573);
 assert.ok(!Object.hasOwn(payload.comm, 'authst'));
 assert.ok(!Object.hasOwn(payload.playback.param, 'filename'));
 
-for (const host of ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com']) {
+for (const host of ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com', 'regional-01.stream.qqmusic.qq.com', 'edge.region.stream.qqmusic.qq.com']) {
   for (const hostData of [{ sip: ['http://' + host + '/'] }, { thirdip: ['https://' + host + '/'] }]) {
     const selected = playback({ ...hostData, midurlinfo: [{ songmid: trackId, filename: file, purl: file + '?fixture=1' }] }).call('playback.resolve', { trackId });
     assert.equal(selected.uri, 'https://' + host + '/' + file + '?fixture=1');
@@ -122,6 +128,15 @@ for (const host of ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com']) 
     const badAbsolute = playback({ sip: ['https://' + host + '/'], midurlinfo: [{ songmid: trackId, filename: file, purl: base + file }] });
     assert.deepEqual(badAbsolute.call('playback.resolve', { trackId }), { error: base.startsWith('//') ? 'INVALID_RESPONSE' : 'UNSUPPORTED' });
   }
+}
+for (const host of ['stream.qqmusic.qq.com', 'evilstream.qqmusic.qq.com', 'ws6.stream.qqmusic.qq.com.evil.example',
+  'stream.qqmusic.qq.com.evil.example', 'ws6..stream.qqmusic.qq.com', '-region.stream.qqmusic.qq.com',
+  'region-.stream.qqmusic.qq.com', 'x'.repeat(64) + '.stream.qqmusic.qq.com']) {
+  const rejectedBase = playback({ sip: ['https://' + host + '/'], midurlinfo: [{ songmid: trackId, filename: file, purl: file }] });
+  assert.deepEqual(rejectedBase.call('playback.resolve', { trackId }), { error: 'UNSUPPORTED' });
+  const rejectedAbsolute = playback({ sip: ['https://ws6.stream.qqmusic.qq.com/'],
+    midurlinfo: [{ songmid: trackId, filename: file, purl: 'https://' + host + '/' + file }] });
+  assert.deepEqual(rejectedAbsolute.call('playback.resolve', { trackId }), { error: 'UNSUPPORTED' });
 }
 const expired = create(session, { code: 0, playback: { code: 1000 } });
 assert.deepEqual(expired.call('playback.resolve', { trackId }), { error: 'AUTH_EXPIRED' });
@@ -181,7 +196,7 @@ assert.ok(!Object.hasOwn(aac, 'contentLength'));
 const injected = create({ cookie: session.cookie + '\r\nX-Injected: yes' });
 assert.deepEqual(injected.call('playback.resolve', { trackId }), { error: 'INVALID_RESPONSE' });
 assert.equal(injected.requests.length, 0);
-assert.deepEqual(manifest.permissions.network, ['u.y.qq.com', 'c.y.qq.com', 'y.gtimg.cn', 'music-file.y.qq.com', 'p.qpic.cn', 'qpic.y.qq.com', 'pic6.y.qq.com', 'thirdqq.qlogo.cn', 'q.qlogo.cn', 'ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com']);
+assert.deepEqual(manifest.permissions.network, ['*.qq.com', '*.gtimg.com', '*.gtimg.cn', '*.cdn-go.cn', '*.qpic.cn', '*.idqqimg.cn', '*.stream.qqmusic.qq.com']);
 assert.ok(manifest.config.every(field => !field.required));
 
 // API2 exercises captured public metadata and synthetic private-account responses.
@@ -857,3 +872,111 @@ for (const options of [{ privacy: true }, { privacy: 'false' }, { type: 'VIDEO' 
   assert.equal(unsupported.requests.length, 0);
 }
 console.log('QQ favorite batch reads and playlist privacy: complete states and unsupported options enforced offline.');
+
+// Web authentication publishes only verified protocol credentials at the final transition.
+const loginCall = (client, action, parameters = {}) => client.call('feature.invoke', { feature: 'login', action, parameters });
+const webCookies = { uin: 'o123456', qqmusic_key: 'web-fixture-key' };
+function completeWeb(client, start, cookies = webCookies, effect = null) {
+  return loginCall(client, 'webLogin', { $continuation: {
+    state: start.continuation, token: 'host-owned-token',
+    effect: effect || { ok: true, result: { closed: true, cookies, cookie: 'untrusted=not-used' } }
+  } });
+}
+const webConfig = { ...session };
+const web = create(webConfig, null, 2, (request, state) => state.stage === 'web-login-profile' || state.stage === 'account' ? profile : fixtures.detail);
+assert.deepEqual(loginCall(web, 'sessionState'), { authenticated: true, kind: 'web' });
+const start = loginCall(web, 'webLogin', { url: 'https://untrusted.example/' });
+assert.equal(start.hostEffect.type, 'web.auth');
+const page = start.hostEffect.parameters;
+const oauth = new URL(page.url);
+assert.equal(oauth.origin, 'https://graph.qq.com');
+assert.equal(oauth.pathname, '/oauth2.0/show');
+assert.equal(oauth.searchParams.get('which'), 'Login');
+assert.equal(oauth.searchParams.get('client_id'), '100497308');
+assert.equal(oauth.searchParams.get('force_qr'), '1');
+assert.equal(oauth.searchParams.get('style'), '40');
+assert.equal(new URL(oauth.searchParams.get('redirect_uri')).origin, 'https://y.qq.com');
+assert.deepEqual(page.cookieHosts, ['y.qq.com', 'i2.y.qq.com', 'graph.qq.com', 'connect.qq.com', 'xui.ptlogin2.qq.com', 'ssl.ptlogin2.qq.com', 'ui.ptlogin2.qq.com', 'ssl.ptlogin2.graph.qq.com', 'ptlogin2.qq.com']);
+assert.ok(page.cookieNames.length <= 32 && page.cookieNames.includes('qqmusic_key') && page.cookieNames.includes('uin'));
+assert.ok(page.cookieNames.every(name => !name.startsWith('pt_')));
+assert.ok(page.allowedHosts.every(host => manifest.permissions.network.includes(host)));
+assert.deepEqual(page.allowedHosts, ['*.qq.com', '*.gtimg.com', '*.cdn-go.cn', '*.qpic.cn', '*.idqqimg.cn']);
+assert.ok(['connect.qq.com', 'jsapi.qq.com', 'open.mobile.qq.com'].every(host =>
+  page.allowedHosts.some(grant => grant === host || grant.startsWith('*.') && host.endsWith(grant.slice(1)))));
+assert.ok(page.cookieHosts.every(host => page.allowedHosts.some(grant =>
+  grant === host || grant.startsWith('*.') && host.endsWith(grant.slice(1)))));
+assert.deepEqual(web.storageSnapshot(), {});
+const signedIn = completeWeb(web, start, { ...webCookies, unrelated_cookie: 'must-not-be-exported' });
+assert.deepEqual(signedIn, { authenticated: true, accountId: 'enc:' + OWNER_ENCRYPTED_UIN, displayName: 'Fixture account', avatarUrl: 'https://q.qlogo.cn/fixture' });
+assert.equal(web.requests.length, 1);
+assert.equal(new URL(web.requests[0].url).searchParams.get('userid'), '0');
+assert.equal(web.requests[0].headers.Cookie, 'uin=o123456; qqmusic_key=web-fixture-key');
+assert.deepEqual(Object.keys(web.storageSnapshot()).sort(), ['cookie', 'guid', 'manualCookieTag']);
+assert.equal(web.storageSnapshot().cookie, 'uin=o123456; qqmusic_key=web-fixture-key');
+assert.match(web.storageSnapshot().manualCookieTag, /^[a-f0-9]{40}$/);
+assert.equal(web.call('catalog.track', { trackId }).trackId, trackId);
+assert.equal(web.storageSnapshot().cookie, 'uin=o123456; qqmusic_key=web-fixture-key');
+assert.deepEqual(web.call('account.get', {}), { accountId: 'enc:' + OWNER_ENCRYPTED_UIN, displayName: 'Fixture account', avatarUrl: 'https://q.qlogo.cn/fixture' });
+assert.equal(loginCall(web, 'logout'), true);
+assert.deepEqual(loginCall(web, 'sessionState'), { authenticated: false, kind: null });
+assert.equal(web.call('account.get', {}), null);
+assert.deepEqual(web.call('playback.resolve', { trackId }), { error: 'AUTH_REQUIRED' });
+webConfig.cookie = 'uin=o123456; qqmusic_key=renewed-manual-key';
+assert.deepEqual(loginCall(web, 'sessionState'), { authenticated: true, kind: 'web' });
+web.call('account.get', {});
+assert.equal(web.requests.at(-1).headers.Cookie, webConfig.cookie);
+
+for (const [cookies, expected] of [
+  [{}, 'AUTH_REQUIRED'], [{ qqmusic_key: 'key-only' }, 'AUTH_REQUIRED'],
+  [{ ...webCookies, qqmusic_key: 'injected; other=value' }, 'INVALID_RESPONSE'],
+  [{ ...webCookies, qqmusic_key: 'injected\r\nHeader: value' }, 'INVALID_RESPONSE'],
+  [{ ...webCookies, qqmusic_key: 'x'.repeat(8193) }, 'INVALID_RESPONSE'],
+]) {
+  const rejected = create({}, null, 2, () => { throw new Error('Rejected web credentials must not make a request'); });
+  assert.deepEqual(completeWeb(rejected, loginCall(rejected, 'webLogin'), cookies), { error: expected });
+  assert.deepEqual(rejected.storageSnapshot(), {});
+}
+for (const response of [{ code: 1000 }, { ...profile, data: { creator: { ...profile.data.creator, uin: '999999' } } }]) {
+  const rejected = create({}, null, 2, () => response);
+  assert.ok(completeWeb(rejected, loginCall(rejected, 'webLogin')).error);
+  assert.deepEqual(rejected.storageSnapshot(), {});
+}
+const cancelledLogin = create({}, null, 2);
+assert.deepEqual(completeWeb(cancelledLogin, loginCall(cancelledLogin, 'webLogin'), {}, { ok: false, code: 'CANCELLED' }), { error: 'CANCELLED' });
+assert.deepEqual(cancelledLogin.storageSnapshot(), {});
+const changingConfig = { ...session }, staleLogin = create(changingConfig, null, 2);
+const staleStart = loginCall(staleLogin, 'webLogin');
+changingConfig.cookie = 'uin=o654321; qqmusic_key=another-account';
+assert.deepEqual(completeWeb(staleLogin, staleStart), { error: 'AUTH_EXPIRED' });
+assert.equal(staleLogin.requests.length, 0);
+const expiredLogin = create({}, null, 2), expiredStart = loginCall(expiredLogin, 'webLogin');
+expiredLogin.advanceClock(30 * 60 * 1000 + 1);
+assert.deepEqual(completeWeb(expiredLogin, expiredStart), { error: 'AUTH_EXPIRED' });
+assert.equal(expiredLogin.requests.length, 0);
+assert.deepEqual(expiredLogin.storageSnapshot(), {});
+const delayedEmptyLogin = create({}, null, 2), delayedEmptyStart = loginCall(delayedEmptyLogin, 'webLogin');
+delayedEmptyLogin.advanceClock(10 * 60 * 1000);
+assert.deepEqual(completeWeb(delayedEmptyLogin, delayedEmptyStart, {}), { error: 'AUTH_REQUIRED' });
+assert.equal(delayedEmptyLogin.requests.length, 0);
+assert.deepEqual(delayedEmptyLogin.storageSnapshot(), {});
+const delayedVerifiedLogin = create({}, null, 2, (_request, state) => {
+  assert.equal(state.stage, 'web-login-profile');
+  return profile;
+});
+const delayedVerifiedStart = loginCall(delayedVerifiedLogin, 'webLogin');
+delayedVerifiedLogin.advanceClock(10 * 60 * 1000);
+assert.equal(completeWeb(delayedVerifiedLogin, delayedVerifiedStart).authenticated, true);
+assert.equal(delayedVerifiedLogin.requests.length, 1);
+assert.equal(delayedVerifiedLogin.storageSnapshot().cookie, 'uin=o123456; qqmusic_key=web-fixture-key');
+const unboundedLogin = create({}, null, 2), unboundedStart = loginCall(unboundedLogin, 'webLogin');
+unboundedStart.continuation.expiresAt += 30 * 60 * 1000;
+assert.deepEqual(completeWeb(unboundedLogin, unboundedStart), { error: 'AUTH_EXPIRED' });
+assert.equal(unboundedLogin.requests.length, 0);
+assert.deepEqual(unboundedLogin.storageSnapshot(), {});
+assert.deepEqual(manifest.features.login, ['webLogin', 'sessionState', 'logout']);
+assert.deepEqual(manifest.sessionKeys, ['cookie', 'manualCookieTag']);
+assert.deepEqual(manifest.sessionCookieNames.cookie, ['uin', 'p_uin', 'wxuin', 'wxopenid', 'qqmusic_uin', 'qqmusic_key', 'qm_keyst', 'p_skey', 'skey', 'p_lskey', 'lskey', 'login_type', 'qqmusic_guid']);
+assert.deepEqual(manifest.permissions.effects, ['web.auth']);
+assert.deepEqual(manifest.featureRoutes, ['account/login']);
+assert.deepEqual(manifest.concurrentReadFeatures, { login: ['sessionState'] });
+console.log('QQ web authentication: fixed OAuth/cookie scope, verified final commit, protocol-only persistence, logout, manual renewal, cancellation and stale-session rejection passed offline.');

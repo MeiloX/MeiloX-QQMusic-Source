@@ -3,7 +3,7 @@
   "providerId": "qqmusic",
   "name": "QQ 音乐",
   "author": "MeiloX contributors",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "apiVersion": 2,
   "entry": "index.js",
   "capabilities": [
@@ -34,23 +34,23 @@
     "playlist.update",
     "playlist.delete",
     "playlist.addTracks",
-    "playlist.removeTracks"
+    "playlist.removeTracks",
+    "feature.invoke"
   ],
   "permissions": {
     "network": [
-      "u.y.qq.com",
-      "c.y.qq.com",
-      "y.gtimg.cn",
-      "music-file.y.qq.com",
-      "p.qpic.cn",
-      "qpic.y.qq.com",
-      "pic6.y.qq.com",
-      "thirdqq.qlogo.cn",
-      "q.qlogo.cn",
-      "ws6.stream.qqmusic.qq.com",
-      "sjy6.stream.qqmusic.qq.com"
+      "*.qq.com",
+      "*.gtimg.com",
+      "*.gtimg.cn",
+      "*.cdn-go.cn",
+      "*.qpic.cn",
+      "*.idqqimg.cn",
+      "*.stream.qqmusic.qq.com"
     ],
-    "storage": true
+    "storage": true,
+    "effects": [
+      "web.auth"
+    ]
   },
   "config": [
     {
@@ -66,7 +66,7 @@
       "required": false
     }
   ],
-  "description": "支持 QQ 音乐首页、发现、歌曲/歌单/专辑/歌手搜索及详情。本人账号、媒体库和收藏需要网页会话。\nCookie 填写本人登录 QQ 音乐网页版后的完整会话，不是 QQ 密码。电脑打开 y.qq.com 并登录，在「检查 → 网络」复制 u.y.qq.com 或 c.y.qq.com 请求的「请求标头 → Cookie」整段值。\n账号 ID 通常留空。失效后重新填写 Cookie。网页播放还受 QQ 音乐当前服务授权限制，配置会话不保证每首歌均可播放。",
+  "description": "支持 QQ 音乐首页、发现、歌曲/歌单/专辑/歌手搜索及详情。使用应用内网页登录访问本人账号、媒体库和收藏，也可手动填写本人 QQ 音乐网页 Cookie。账号 ID 通常留空。播放以 QQ 音乐当前账号授权为准。",
   "searchTypes": [
     "track",
     "playlist",
@@ -77,5 +77,41 @@
     "playlist",
     "album",
     "artist"
-  ]
+  ],
+  "features": {
+    "login": [
+      "webLogin",
+      "sessionState",
+      "logout"
+    ]
+  },
+  "featureRoutes": [
+    "account/login"
+  ],
+  "sessionKeys": [
+    "cookie",
+    "manualCookieTag"
+  ],
+  "sessionCookieNames": {
+    "cookie": [
+      "uin",
+      "p_uin",
+      "wxuin",
+      "wxopenid",
+      "qqmusic_uin",
+      "qqmusic_key",
+      "qm_keyst",
+      "p_skey",
+      "skey",
+      "p_lskey",
+      "lskey",
+      "login_type",
+      "qqmusic_guid"
+    ]
+  },
+  "concurrentReadFeatures": {
+    "login": [
+      "sessionState"
+    ]
+  }
 }

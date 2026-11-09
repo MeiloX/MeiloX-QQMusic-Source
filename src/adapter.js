@@ -5,12 +5,32 @@ import { sha1 } from '@noble/hashes/legacy.js';
 (function () {
   'use strict';
   const API = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
-  const AUDIO_HOSTS = ['ws6.stream.qqmusic.qq.com', 'sjy6.stream.qqmusic.qq.com'];
+  const AUDIO_HOST_SUFFIX = '.stream.qqmusic.qq.com';
+  const WEB_LOGIN_TTL_MS = 30 * 60 * 1000;
+  const LOGIN_COOKIE_NAMES = ['uin', 'p_uin', 'wxuin', 'wxopenid', 'qqmusic_uin', 'qqmusic_key', 'qm_keyst', 'p_skey', 'skey', 'p_lskey', 'lskey', 'login_type', 'qqmusic_guid'];
+  const LOGIN_COOKIE_HOSTS = ['y.qq.com', 'i2.y.qq.com', 'graph.qq.com', 'connect.qq.com', 'xui.ptlogin2.qq.com', 'ssl.ptlogin2.qq.com', 'ui.ptlogin2.qq.com', 'ssl.ptlogin2.graph.qq.com', 'ptlogin2.qq.com'];
+  const LOGIN_HOSTS = ['*.qq.com', '*.gtimg.com', '*.cdn-go.cn', '*.qpic.cn', '*.idqqimg.cn'];
+  const LOGIN_URL = 'https://graph.qq.com/oauth2.0/show?which=Login&response_type=code&client_id=100497308&redirect_uri=' +
+    encodeURIComponent('https://y.qq.com/portal/wx_redirect.html?login_type=1&surl=' + encodeURIComponent('https://y.qq.com/')) +
+    '&state=state&display=pc&scope=get_user_info%2Cget_app_friends&force_qr=1&style=40';
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
 
   function failure(code) { return { error: code }; }
-  function cookieText(context) {
+  function manualCookie(context) {
     return String(context.config.cookie || '').trim().replace(/^Cookie:\s*/i, '');
+  }
+  function manualCookieTag(context) {
+    return Array.from(sha1(utf8Bytes(manualCookie(context))), function (byte) { return byte.toString(16).padStart(2, '0'); }).join('');
+  }
+  function cookieText(context) {
+    const storage = context.storage || {};
+    // A later manual configuration replaces the web session it superseded.
+    return typeof storage.cookie === 'string' && storage.manualCookieTag === manualCookieTag(context) ? storage.cookie : manualCookie(context);
+  }
+  function protocolStorage(context) {
+    const result = {};
+    for (const key of ['guid', 'cookie', 'manualCookieTag']) if (typeof (context.storage || {})[key] === 'string') result[key] = context.storage[key];
+    return result;
   }
   function cookieFields(context) {
     const fields = Object.create(null);
@@ -74,6 +94,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json', Referer: 'https://y.qq.com/', 'User-Agent': UA };
     if (cookie && !lite) headers.Cookie = cookie;
     state.guid = state.guid || guid(context);
+    state.protocolStorage = state.protocolStorage || protocolStorage(context);
     state.ag1 = !lite;
     const plain = { url: API, method: 'POST', headers: headers, body: JSON.stringify(body) };
     const outgoing = lite ? plain : encodeRequest(plain, context);
@@ -115,7 +136,11 @@ import { sha1 } from '@noble/hashes/legacy.js';
     }
     return result;
   }
-  function finish(result, state) { return { result: result, storage: { guid: state.guid } }; }
+  function finish(result, state) {
+    const storage = Object.assign({}, state.protocolStorage);
+    if (state.guid) storage.guid = state.guid;
+    return { result: result, storage: storage };
+  }
   function authError(context) { return failure(account(context).present ? 'AUTH_EXPIRED' : 'AUTH_REQUIRED'); }
   function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
   function statusCode(value) {
@@ -229,7 +254,10 @@ import { sha1 } from '@noble/hashes/legacy.js';
   }
   function approvedAudioUrl(value) {
     const authority = /^https?:\/\/([^/?#]+)(?:\/|$)/i.exec(value);
-    return Boolean(authority && AUDIO_HOSTS.indexOf(authority[1].toLowerCase()) >= 0);
+    if (!authority) return false;
+    const host = authority[1].toLowerCase();
+    return host.length <= 253 && host.endsWith(AUDIO_HOST_SUFFIX) &&
+      host.split('.').every(function (label) { return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label); });
   }
   function resource(data, state, context) {
     if (data.retcode !== undefined && Number(data.retcode) !== 0) return Number(data.retcode) === 104009 ? authError(context) : failure('UNAVAILABLE');
@@ -256,7 +284,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
       const supplied = [].concat(data.thirdip || [], data.sip || []).filter(function (base) { return typeof base === 'string'; });
       const allowed = supplied.find(approvedAudioUrl);
       if (supplied.length && !allowed) return failure('UNSUPPORTED');
-      const base = allowed ? allowed.replace(/^http:/i, 'https:').replace(/\/$/, '') : 'https://' + AUDIO_HOSTS[0];
+      const base = allowed ? allowed.replace(/^http:/i, 'https:').replace(/\/$/, '') : 'https://ws6.stream.qqmusic.qq.com';
       uri = base + '/' + uri.replace(/^\//, '');
     }
     const seconds = Number(data.expiration);
@@ -373,6 +401,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
     const headers = { Accept: 'application/json', Referer: 'https://y.qq.com/', 'User-Agent': UA };
     if (cookie) headers.Cookie = cookie;
     state.key = '@cgi'; state.guid = state.guid || guid(context);
+    state.protocolStorage = state.protocolStorage || protocolStorage(context);
     return { request: { url: 'https://c.y.qq.com' + path + '?' + query, method: 'GET', headers: headers }, state: state };
   }
   function batch(nodes, state, context, lite) {
@@ -391,6 +420,44 @@ import { sha1 } from '@noble/hashes/legacy.js';
   function profile(state, context) {
     return cgi('/rsc/fcgi-bin/fcg_get_profile_homepage.fcg', { cid: 205360838, ct: 20, userid: 0, reqfrom: 1, reqtype: 0, needNewCode: 0 },
       Object.assign({}, state, { selfProfile: true, sessionTag: sessionTag(context) }), context);
+  }
+  function webCookieContext(context, cookie) {
+    return Object.assign({}, context, {
+      config: Object.assign({}, context.config, { uin: '' }),
+      storage: Object.assign(protocolStorage(context), { cookie: cookie, manualCookieTag: manualCookieTag(context) })
+    });
+  }
+  function loginFeature(params, context) {
+    if (params.feature !== 'login' || !['webLogin', 'sessionState', 'logout'].includes(params.action)) return failure('UNSUPPORTED');
+    if (params.action === 'sessionState') {
+      const authenticated = requireAuth(context) === null;
+      return { result: { authenticated: authenticated, kind: authenticated ? 'web' : null } };
+    }
+    if (params.action === 'logout') return finish(true, { protocolStorage: Object.assign(protocolStorage(context), { cookie: '', manualCookieTag: manualCookieTag(context) }) });
+    const continuation = (params.parameters || {}).$continuation;
+    if (!continuation) {
+      if (typeof context.secureRandomBase64 !== 'string' || !/^[A-Za-z0-9+/]{342}==$/.test(context.secureRandomBase64)) return failure('UNSUPPORTED');
+      return { result: { hostEffect: { type: 'web.auth', parameters: {
+        url: LOGIN_URL, title: 'QQ 音乐登录', allowedHosts: LOGIN_HOSTS.slice(), cookieHosts: LOGIN_COOKIE_HOSTS.slice(), cookieNames: LOGIN_COOKIE_NAMES.slice()
+      } }, continuation: { action: 'webLogin', nonce: context.secureRandomBase64.slice(0, 32), expiresAt: Date.now() + WEB_LOGIN_TTL_MS, sessionTag: sessionTag(context) } } };
+    }
+    const state = continuation.state, effect = continuation.effect;
+    if (!object(state) || state.action !== 'webLogin' || !/^[A-Za-z0-9+/]{32}$/.test(state.nonce || '') ||
+        !Number.isSafeInteger(state.expiresAt) || state.expiresAt < Date.now() || state.expiresAt > Date.now() + WEB_LOGIN_TTL_MS || state.sessionTag !== sessionTag(context)) return failure('AUTH_EXPIRED');
+    if (!object(effect) || effect.ok !== true) return failure(effect && effect.code === 'CANCELLED' ? 'CANCELLED' : 'UNAVAILABLE');
+    const cookies = object(effect.result) && effect.result.cookies;
+    if (!object(cookies)) return failure('INVALID_RESPONSE');
+    const parts = [];
+    for (const name of LOGIN_COOKIE_NAMES) if (Object.hasOwn(cookies, name)) {
+      const value = cookies[name];
+      if (typeof value !== 'string' || value.length > 8192 || /[;\r\n\u0000]/.test(value)) return failure('INVALID_RESPONSE');
+      if (value) parts.push(name + '=' + value);
+    }
+    const cookie = parts.join('; ');
+    if (cookie.length > 16384) return failure('INVALID_RESPONSE');
+    const candidate = webCookieContext(context, cookie);
+    if (requireAuth(candidate)) return failure('AUTH_REQUIRED');
+    return profile({ stage: 'web-login-profile', webCookie: cookie, previousSessionTag: state.sessionTag }, candidate);
   }
   function playlistRequest(params, stage, context, extra) {
     const state = Object.assign({}, page(params), extra, { stage: stage, playlistId: String(params.playlistId || '') });
@@ -515,7 +582,7 @@ import { sha1 } from '@noble/hashes/legacy.js';
       return mid(params.artistId) ? request('artistAlbums', 'music.musichallAlbum.AlbumListServer', 'GetAlbumList', { singerMid: params.artistId, order: 0, begin: state.offset, num: state.limit, songNumTag: 0, singerID: 0 }, state, context, false) : failure('NOT_FOUND');
     },
     'account.get': function (_, context) {
-      if (!account(context).present) return finish(null, { guid: guid(context) });
+      if (!account(context).present) return finish(null, { guid: guid(context), protocolStorage: protocolStorage(context) });
       const denied = requireAuth(context); return denied || profile({ stage: 'account' }, context);
     },
     'track.liked': function (params, context) {
@@ -528,7 +595,8 @@ import { sha1 } from '@noble/hashes/legacy.js';
       return mid(params.trackId) ? request('liked', 'music.musicasset.SongFavRead', 'IsSongFanByMid', { v_songMid: [params.trackId] }, { stage: 'saved', type: 'track', id: params.trackId }, context, false) : failure('NOT_FOUND');
     },
     'collection.saved': function (params, context) { return collection(params, context, false); },
-    'collection.save': function (params, context) { return collection(params, context, true); }
+    'collection.save': function (params, context) { return collection(params, context, true); },
+    'feature.invoke': loginFeature
   };
   ['library.likedTracks', 'library.createdPlaylists', 'library.savedPlaylists', 'library.savedAlbums', 'library.followedArtists'].forEach(function (operation) {
     operations[operation] = function (params, context) { return library(operation, params, context); };
@@ -537,6 +605,16 @@ import { sha1 } from '@noble/hashes/legacy.js';
     operations[operation] = function (params, context) { return mutation(params, context, operation); };
   });
   operations.onResponse = function (operation, response, state, context) {
+    if (state.stage === 'web-login-profile') {
+      if (operation !== 'feature.invoke' || state.previousSessionTag !== sessionTag(context)) return failure('AUTH_EXPIRED');
+      const candidate = webCookieContext(context, state.webCookie);
+      const data = readResponse(response, state.key, candidate, false, state.ag1);
+      if (data.error) return data;
+      const owner = profileOwner(data, candidate, state);
+      if (!owner || typeof data.creator.nick !== 'string' || !data.creator.nick.trim()) return failure('INVALID_RESPONSE');
+      state.protocolStorage = Object.assign(protocolStorage(context), { cookie: state.webCookie, manualCookieTag: manualCookieTag(context) });
+      return finish({ authenticated: true, accountId: 'enc:' + owner.encryptedUin, displayName: text(data.creator.nick), avatarUrl: image(data.creator.headpic) }, state);
+    }
     if (state.sessionTag && state.sessionTag !== sessionTag(context)) return authError(context);
     const data = readResponse(response, state.key, context, state.allowEmpty, state.ag1);
     if (data.error) {
